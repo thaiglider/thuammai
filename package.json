@@ -7,6 +7,12 @@
     "node": ">=24"
   },
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "e2e": "playwright test",
+    "site:fixtures": "npm run build && npm run pipeline:fixtures",
+    "budget": "node tools/check-budget.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -14,12 +20,16 @@
     "pipeline:fixtures": "tsx src/pipeline/main.ts --fixtures tests/fixtures/snapshot-2026-09-28T1443 --now 2026-09-28T14:43:00+07:00 --out dist --state .cache/fixture-state.json --fresh-state"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.19.0",
     "eslint": "^10.11.0",
+    "qrcode-generator": "^2.0.4",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
+    "vite": "^8.3.1",
     "vitest": "^5.0.2"
   }
 }

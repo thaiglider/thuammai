@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, parse, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -20,22 +20,16 @@ export interface RunOpts {
   fetcher?: Fetcher;
 }
 
-/** Refuse to wipe anything but a directory that either doesn't exist yet, is empty,
- *  or already looks like a previous pipeline output (has `data/meta.json`). */
+/** Refuse to write into a directory that is the filesystem root, the user's home, the
+ *  current working directory, or an ancestor of it. The pipeline only ever replaces its
+ *  own `data/` and `p/` subdirectories, so an app build elsewhere under `out` is safe. */
 function assertSafeOutDir(out: string): void {
   const resolved = resolve(out);
   const cwd = resolve(process.cwd());
   const home = resolve(homedir());
   const root = parse(resolved).root;
-  const isCwdOrAncestorOfCwd = resolved === cwd || cwd.startsWith(resolved + sep);
-  if (resolved === root || resolved === home || isCwdOrAncestorOfCwd) {
-    throw new Error(`Refusing to wipe unsafe output directory: ${resolved}`);
-  }
-  if (existsSync(resolved)) {
-    const entries = readdirSync(resolved);
-    if (entries.length > 0 && !existsSync(join(resolved, 'data', 'meta.json'))) {
-      throw new Error(`Refusing to wipe non-pipeline directory (no data/meta.json found): ${resolved}`);
-    }
+  if (resolved === root || resolved === home || resolved === cwd || cwd.startsWith(resolved + sep)) {
+    throw new Error(`Refusing to write into unsafe output directory: ${resolved}`);
   }
 }
 
@@ -75,7 +69,7 @@ export async function runPipeline(opts: RunOpts): Promise<RunResult> {
 
   st.savedAt = now.toISOString();
   const files = buildOutputs({ now, obs, collected: c, sd, history: st.history, historyH, state: st });
-  rmSync(opts.out, { recursive: true, force: true });
+  for (const sub of ['data', 'p']) rmSync(join(opts.out, sub), { recursive: true, force: true });
   for (const [rel, content] of files) {
     const full = join(opts.out, rel);
     mkdirSync(dirname(full), { recursive: true });

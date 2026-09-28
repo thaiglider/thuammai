@@ -74,3 +74,5 @@ export interface SourceHealth {
 
 /** Fresh rain station that reported zero rain: [lat, lon] (province given by the file it is in). */
 export type Rain0 = [number, number];
+
+export interface ProvinceGeo { code: string; th: string; en: string; lat: number; lon: number; bbox: [number, number, number, number] }

@@ -1,4 +1,4 @@
-export const THRESHOLDS_VERSION = '2026-09-28.3';
+export const THRESHOLDS_VERSION = '2026-09-28.4';
 
 /** กทม. นนทบุรี ปทุมธานี สมุทรปราการ นครปฐม สมุทรสาคร — rules use the STATION's province. */
 export const BKK_METRO: readonly string[] = ['10', '11', '12', '13', '73', '74'];

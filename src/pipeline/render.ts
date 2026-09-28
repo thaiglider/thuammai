@@ -77,7 +77,7 @@ export function renderAreaPage(p: AreaPage, generatedAt: string): string {
   const rain = p.obs.filter((o) => o.kind === 'rain' && o.level >= 2);
   const list = (arr: Observation[]) => `<ul>${arr.map((o) => `<li>${badge(o.level)} ${esc(stationLine(o))}</li>`).join('')}</ul>`;
   const bkk = p.code === '10' || p.kind === 'district';
-  let body = `<p><a href="../index.html">← ทุกพื้นที่</a></p>
+  let body = `<p><a href="index.html">← ทุกพื้นที่</a></p>
 <h1>${esc(label)}</h1>
 <p>${badge(L)}</p>
 ${freshnessNote(generatedAt)}`;
@@ -85,7 +85,7 @@ ${freshnessNote(generatedAt)}`;
   else body += `<p>สถานีระดับเฝ้าระวังขึ้นไป <strong>${p.area.n2} จาก ${p.area.N} สถานี</strong> (เตือนภัยขึ้นไป ${p.area.n3} จาก ${p.area.N} สถานี)</p>`;
   body += `<p class="muted">${esc(AREA_NOTE_TH)}</p>
 <p class="muted">อัปเดต ${esc(fmtDateTime(generatedAt))}</p>
-<p><a href="../index.html?lat=${p.lat}&amp;lon=${p.lon}">ดูความเสี่ยงที่บ้านของฉัน</a></p>`;
+<p><a href="../?lat=${p.lat}&amp;lon=${p.lon}">ดูความเสี่ยงที่บ้านของฉัน</a></p>`;
   if (flagged.length) body += `<h2>จุดที่ควรติดตาม</h2>${list(flagged)}`;
   if (rain.length) body += `<h2>ฝนหนัก</h2>${list(rain)}`;
   if (p.dams.length) body += `<h2>เขื่อนในจังหวัด</h2>${list(p.dams)}`;
@@ -112,9 +112,10 @@ export interface IndexRow { code: string; kind: 'province' | 'district'; name: s
 
 export function renderIndex(rows: IndexRow[], generatedAt: string): string {
   const sorted = [...rows].sort((a, b) => b.level - a.level || b.n2 / Math.max(1, b.N) - a.n2 / Math.max(1, a.N) || a.name.localeCompare(b.name, 'th'));
-  const row = (r: IndexRow) => `<div class="row"><a href="p/${esc(r.code)}.html">${esc(r.kind === 'district' ? `เขต${r.name}` : r.name)}</a>${badge(r.level)}</div>`;
+  const row = (r: IndexRow) => `<div class="row"><a href="${esc(r.code)}.html">${esc(r.kind === 'district' ? `เขต${r.name}` : r.name)}</a>${badge(r.level)}</div>`;
   const worrying = sorted.filter((r) => r.level >= 2 && r.kind === 'province').slice(0, 5);
   const body = `<h1>ท่วมไหม</h1>
+<p><a href="../">เปิดแอป "จุดของฉัน"</a></p>
 <p>ประเมินความเสี่ยงน้ำท่วมจากข้อมูลเปิด อัปเดต ${esc(fmtDateTime(generatedAt))}</p>
 ${freshnessNote(generatedAt)}
 ${worrying.length ? `<h2>จังหวัดที่น่าห่วงตอนนี้</h2><div class="card">${worrying.map(row).join('')}</div>` : ''}

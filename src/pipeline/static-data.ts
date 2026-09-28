@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ProvinceGeo } from '../core/types';
 
-export interface ProvinceGeo { code: string; th: string; en: string; lat: number; lon: number; bbox: [number, number, number, number] }
+export type { ProvinceGeo };
 export interface DistrictGeo { code: string; th: string; en: string; lat: number; lon: number }
 export interface ProvinceShape { code: string; rings: [number, number][][] }
 export interface ChainStation { code: string; th: string; qThresholds?: number[] }

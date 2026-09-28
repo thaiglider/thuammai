@@ -92,7 +92,7 @@ export function buildOutputs(inp: PublishInput): Map<string, string> {
     }, gen));
   }
   put('data/areas.json', { ...head, areas: areaRows });
-  files.set('index.html', renderIndex(areaRows, gen));
+  files.set('p/index.html', renderIndex(areaRows, gen));
 
   // history for charts: river/canal/road stations at level ≥2 (or held) only, as 30-min slots
   // { t0: epochSec of the first slot, step: 1800, v: last value per slot, null for gaps }.

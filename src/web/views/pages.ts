@@ -1,0 +1,142 @@
+import { AREA_NOTE_TH, DISCLAIMER_TH, EMERGENCY, LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
+import { BKK_METRO, DAM, FRESH_MIN, THRESHOLDS_VERSION } from '../../core/thresholds';
+import { fmtDateTime } from '../../core/time';
+import type { AreaRow } from '../lib/data';
+import { clear, h } from '../lib/dom';
+import { freshness, staleLine } from '../lib/freshness';
+import { normalizeThai } from '../lib/search';
+import { applySettings, saveSettings, type Settings } from '../lib/settings';
+import type { AppCtx } from './home';
+import type { Tab } from './shell';
+
+const SOURCE_TH: Record<string, string> = {
+  river: 'ระดับน้ำแม่น้ำ — สสน. (ThaiWater)', rain: 'ฝน — สสน. (ThaiWater)', road: 'น้ำบนถนน กทม. — สสน. (ThaiWater)',
+  canal: 'ระดับน้ำคลอง กทม. — สสน. (ThaiWater)', dam: 'เขื่อน — สสน. (ThaiWater)', longdo: 'เหตุการณ์บนถนน — Longdo Traffic',
+  traffy: 'ประชาชนแจ้ง — Traffy Fondue (ยังไม่ยืนยัน)', forecast: 'พยากรณ์ฝน — Open-Meteo', tmd: 'ประกาศเตือน — กรมอุตุนิยมวิทยา',
+};
+
+export async function renderPage(tab: Exclude<Tab, 'home'>, ctx: AppCtx): Promise<void> {
+  const main = ctx.shell.main;
+  clear(main);
+  if (tab === 'areas') return areas(ctx, main);
+  if (tab === 'help') return help(main);
+  if (tab === 'sources') return sources(ctx, main);
+  return about(ctx, main);
+}
+
+async function areas(ctx: AppCtx, main: HTMLElement): Promise<void> {
+  const q = h('input', { type: 'search', 'aria-label': 'ค้นหาจังหวัดหรือเขต', placeholder: 'ค้นหาจังหวัดหรือเขต' });
+  const list = h('div', { 'data-testid': 'areas-list' });
+  let all: AreaRow[];
+  try {
+    all = await ctx.store.areas();
+  } catch {
+    list.append(h('p', { class: 'muted' }, 'โหลดรายชื่อพื้นที่ไม่ได้ — ลองใหม่ภายหลัง'));
+    main.append(h('h1', {}, 'รายพื้นที่'), h('p', { class: 'muted' }, AREA_NOTE_TH), q, list);
+    return;
+  }
+  const now = ctx.now();
+  const fr = freshness(ctx.meta.generatedAt, now, ctx.online());
+  const sorted = [...all].sort((x, y) => y.level - x.level || x.name.localeCompare(y.name, 'th'));
+  const norm = sorted.map((a) => normalizeThai(a.name));
+  const draw = () => {
+    clear(list);
+    // Same normalisation as the home search (prefixes จ./เขต/…, spaces and tone marks ignored).
+    const term = normalizeThai(q.value);
+    sorted.forEach((a, i) => {
+      if (term && !norm[i]!.includes(term)) return;
+      list.append(h('div', { class: 'row' },
+        h('a', { href: `./p/${a.code}.html` }, a.kind === 'district' ? `เขต${a.name}` : a.name),
+        h('span', { class: fr.grey ? 'badge grey' : 'badge', 'data-testid': 'area-level', style: `background:${LEVEL_COLOR[a.level].bg};color:${LEVEL_COLOR[a.level].fg};font-size:1rem` }, LEVEL_TH[a.level])));
+    });
+  };
+  q.addEventListener('input', draw);
+  draw();
+  main.append(h('h1', {}, 'รายพื้นที่'),
+    ...(fr.grey ? [h('p', { class: 'muted', 'data-testid': 'areas-stale' }, staleLine(ctx.meta.generatedAt, now))] : []),
+    h('p', { class: 'muted' }, AREA_NOTE_TH), q, list);
+}
+
+function help(main: HTMLElement): void {
+  main.append(h('section', { 'data-testid': 'help' },
+    h('h1', {}, 'ช่วยเหลือ'),
+    h('p', {}, h('strong', {}, 'เว็บนี้ไม่รับแจ้งเหตุ'), ' — ติดต่อช่องทางทางการด้านล่าง'),
+    h('ul', { class: 'list' }, ...EMERGENCY.map((e) => h('li', { class: 'row' }, h('a', { href: `tel:${e.tel}`, 'aria-label': `โทร ${e.tel} ${e.th}` }, `โทร ${e.tel}`), ` — ${e.th}`))),
+    h('ul', { class: 'list' },
+      h('li', { class: 'row' }, h('a', { href: 'https://www.disaster.go.th/', rel: 'noopener' }, 'กรมป้องกันและบรรเทาสาธารณภัย (ปภ.) — ศูนย์พักพิงและประกาศ')),
+      h('li', { class: 'row' }, h('a', { href: 'https://share.traffy.in.th/teamchadchart', rel: 'noopener' }, 'Traffy Fondue — แจ้งปัญหาในกรุงเทพฯ')),
+      h('li', { class: 'row' }, h('a', { href: 'https://www.bangkok.go.th/', rel: 'noopener' }, 'กรุงเทพมหานคร — ประกาศและศูนย์พักพิง'))),
+    h('h2', {}, 'ความปลอดภัยเมื่อน้ำท่วม'),
+    h('ul', {},
+      h('li', {}, 'ถ้าน้ำเริ่มเข้าบ้าน ตัดไฟที่เบรกเกอร์ก่อน อย่าแตะอุปกรณ์ไฟฟ้าขณะตัวเปียก'),
+      h('li', {}, 'อย่าลุยน้ำสูงเกินเข่า และอย่าขับรถผ่านน้ำไหลแรง'),
+      h('li', {}, 'ระวังไฟดูด สัตว์มีพิษ และของมีคมใต้น้ำ'),
+      h('li', {}, 'เตรียมถุงยังชีพ: ยาประจำตัว เอกสารสำคัญในถุงกันน้ำ ไฟฉาย น้ำดื่ม พาวเวอร์แบงก์')),
+    h('p', { class: 'muted' }, DISCLAIMER_TH)));
+}
+
+function sources(ctx: AppCtx, main: HTMLElement): void {
+  const m = ctx.meta;
+  const table = h('table', { 'data-testid': 'sources-table' },
+    h('thead', {}, h('tr', {}, h('th', {}, 'แหล่ง'), h('th', {}, 'สถานะ'))),
+    h('tbody', {}, ...m.sources.map((s) => h('tr', {},
+      h('td', {}, SOURCE_TH[s.id] ?? s.id),
+      h('td', {}, s.ok ? `ปกติ · ${s.count} รายการ${s.lagMin !== null ? ` · ช้า ${s.lagMin} นาที` : ''}`
+        : s.carriedFrom ? `ใช้ข้อมูลค้างจาก ${fmtDateTime(s.carriedFrom)} (${s.error ?? 'ดึงไม่สำเร็จ'})` : `ดึงไม่สำเร็จ (${s.error ?? ''})`)))));
+  main.append(h('section', {},
+    h('h1', {}, 'แหล่งข้อมูลและเกณฑ์'),
+    h('p', {}, `อัปเดตล่าสุด ${fmtDateTime(m.generatedAt)} · เกณฑ์รุ่น ${THRESHOLDS_VERSION}${m.thresholdsVersion !== THRESHOLDS_VERSION ? ` (ข้อมูลใช้รุ่น ${m.thresholdsVersion})` : ''}`),
+    table,
+    h('p', {}, 'ไม่มีรายงาน ≠ ไม่ท่วม — รายงานประชาชนครอบคลุมเฉพาะบางพื้นที่ (Traffy เฉพาะกรุงเทพฯ)'),
+    h('h2', {}, 'เกณฑ์โดยย่อ'),
+    h('ul', {},
+      h('li', {}, 'แม่น้ำ: ล้นตลิ่ง = อันตราย · ต่ำกว่าตลิ่ง ≤20 ซม. = เตือนภัย · ≤50 ซม. = เฝ้าระวัง'),
+      h('li', {}, 'คลอง กทม.: ล้นตลิ่ง = อันตราย · ต่ำกว่าตลิ่ง <30 ซม. = เตือนภัย · <60 ซม. หรือเกินเกณฑ์วิกฤตของ กทม. = เฝ้าระวัง'),
+      h('li', {}, 'น้ำบนถนน: ≥30 ซม. = อันตราย · ≥10 ซม. = เตือนภัย · ≥5 ซม. = เฝ้าระวัง'),
+      h('li', {}, `ฝน (กทม. และปริมณฑล ${BKK_METRO.length} จังหวัด): 1 ชม. ≥30 มม. หรือ 3 ชม. ≥60 มม. = เฝ้าระวัง · 1 ชม. ≥60 หรือ 3 ชม. ≥100 = เตือนภัย`),
+      h('li', {}, 'ฝน (จังหวัดอื่น): 24 ชม. ≥90 มม. = เฝ้าระวัง · ≥150 มม. = เตือนภัย'),
+      h('li', {}, `เขื่อน: ปริมาณน้ำ ≥${DAM.l2}% ของความจุ = เฝ้าระวัง`),
+      h('li', {}, `ข้อมูลเก่ากว่าเกณฑ์ไม่ถูกนับ (แม่น้ำ ${FRESH_MIN.river / 60} ชม. · ฝน ${FRESH_MIN.rain / 60} ชม. · ถนน ${FRESH_MIN.road / 60} ชม. · คลอง ${FRESH_MIN.canal / 60} ชม.)`),
+      h('li', {}, 'ระดับ "อันตราย" ต้องมีหลักฐานโดยตรงใกล้จุด ฝนหรือพยากรณ์อย่างเดียวไม่ถึงระดับนี้')),
+    ...(m.tmd.length ? [h('h2', {}, 'ประกาศกรมอุตุนิยมวิทยา'), ...m.tmd.map((w) => h('div', { class: 'card' }, h('strong', {}, w.title), h('p', {}, w.body)))] : [])));
+}
+
+function about(ctx: AppCtx, main: HTMLElement): void {
+  const s: Settings = { ...ctx.settings };
+  const sizeBtns: { el: HTMLButtonElement; val: Settings['size'] }[] = [];
+  const themeBtns: { el: HTMLButtonElement; val: Settings['theme'] }[] = [];
+  const syncPressed = () => {
+    for (const { el, val } of sizeBtns) el.setAttribute('aria-pressed', String(s.size === val));
+    for (const { el, val } of themeBtns) el.setAttribute('aria-pressed', String(s.theme === val));
+  };
+  const set = (patch: Partial<Settings>) => { Object.assign(s, patch); saveSettings(ctx.kv, s); applySettings(document, s); syncPressed(); };
+  const sizeA = h('button', { onclick: () => set({ size: 'a' }), 'aria-pressed': String(s.size === 'a') }, 'ก ปกติ');
+  const sizeA2 = h('button', { onclick: () => set({ size: 'a2' }), style: 'font-size:1.15rem', 'aria-pressed': String(s.size === 'a2') }, 'ก ใหญ่');
+  const sizeA3 = h('button', { onclick: () => set({ size: 'a3' }), style: 'font-size:1.3rem', 'data-testid': 'size-a3', 'aria-pressed': String(s.size === 'a3') }, 'ก ใหญ่มาก');
+  sizeBtns.push({ el: sizeA, val: 'a' }, { el: sizeA2, val: 'a2' }, { el: sizeA3, val: 'a3' });
+  const themeAuto = h('button', { onclick: () => set({ theme: 'auto' }), 'aria-pressed': String(s.theme === 'auto') }, 'ตามเครื่อง');
+  const themeLight = h('button', { onclick: () => set({ theme: 'light' }), 'aria-pressed': String(s.theme === 'light') }, 'สว่าง');
+  const themeDark = h('button', { onclick: () => set({ theme: 'dark' }), 'aria-pressed': String(s.theme === 'dark') }, 'มืด');
+  themeBtns.push({ el: themeAuto, val: 'auto' }, { el: themeLight, val: 'light' }, { el: themeDark, val: 'dark' });
+  main.append(
+    h('section', { 'data-testid': 'settings' },
+      h('h1', {}, 'ตั้งค่า'),
+      h('div', { class: 'actions', role: 'group', 'aria-label': 'ขนาดตัวอักษร' }, sizeA, sizeA2, sizeA3),
+      h('div', { class: 'actions', role: 'group', 'aria-label': 'ธีม' }, themeAuto, themeLight, themeDark),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.saveData, onchange: (e: Event) => set({ saveData: (e.target as HTMLInputElement).checked }) }), ' โหมดประหยัดเน็ต')),
+    h('section', { 'data-testid': 'about' },
+      h('h2', {}, 'เกี่ยวกับ'),
+      h('p', {}, 'ท่วมไหม ทำโดยอาสาสมัคร ไม่ใช่หน่วยงานทางการ ใช้เพื่อประเมินสถานการณ์และเตรียมพร้อม — ทำตามประกาศของหน่วยงานเสมอ'),
+      h('p', {}, h('a', { href: 'https://github.com/thaiglider/thuammai', rel: 'noopener' }, 'โค้ดของเว็บ (GitHub)')),
+      h('h2', {}, 'เครดิตและสัญญาอนุญาต'),
+      h('ul', {},
+        h('li', {}, 'ข้อมูลน้ำและฝน: สถาบันสารสนเทศทรัพยากรน้ำ (สสน.) — ThaiWater'),
+        h('li', {}, 'เหตุการณ์บนถนนและกล้อง: Longdo Traffic / iTIC'),
+        h('li', {}, 'รายงานประชาชน: Traffy Fondue'),
+        h('li', {}, 'พยากรณ์ฝน: Open-Meteo (CC BY 4.0)'),
+        h('li', {}, 'ประกาศเตือน: กรมอุตุนิยมวิทยา'),
+        h('li', {}, 'ขอบเขตการปกครองและรายชื่อตำบล: OCHA COD-AB Thailand (CC BY-IGO)'),
+        h('li', {}, 'ค้นหาสถานที่: © ผู้ร่วมพัฒนา OpenStreetMap (ODbL)'),
+        h('li', {}, 'ฟอนต์: Noto Sans Thai Looped (SIL Open Font License)')),
+      h('p', { class: 'muted' }, DISCLAIMER_TH)));
+}

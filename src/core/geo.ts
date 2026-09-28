@@ -1,4 +1,5 @@
 import { TH_BBOX } from './thresholds';
+import type { ProvinceGeo } from './types';
 
 export interface LatLon { lat: number; lon: number }
 export interface Stationish extends LatLon { id: string; kind: string }
@@ -26,6 +27,15 @@ export function nearest<T extends LatLon>(items: readonly T[], lat: number, lon:
 export function inThailand(lat: number, lon: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lon)
     && lon >= TH_BBOX[0] && lat >= TH_BBOX[1] && lon <= TH_BBOX[2] && lat <= TH_BBOX[3];
+}
+
+/** Province codes whose bounding box, expanded by bufferKm, contains the point. */
+export function provincesNear(lat: number, lon: number, provinces: readonly ProvinceGeo[], bufferKm = 10): string[] {
+  const dLat = bufferKm / 111;
+  const dLon = bufferKm / (111 * Math.cos(lat * RAD));
+  return provinces
+    .filter((p) => lon >= p.bbox[0] - dLon && lon <= p.bbox[2] + dLon && lat >= p.bbox[1] - dLat && lat <= p.bbox[3] + dLat)
+    .map((p) => p.code);
 }
 
 /** Two items are independent when ids differ AND (kinds differ OR they are ≥ minKm apart). */
