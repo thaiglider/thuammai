@@ -1,0 +1,81 @@
+name: pipeline
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'   # watchdog; the dispatch chain below is the main 10-minute loop
+  push:
+    branches: [main]
+permissions: {}
+env:
+  SITE_URL: https://thaiglider.github.io/thuammai
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          skip=false
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            active=$(gh run list -R "$GITHUB_REPOSITORY" --workflow pipeline.yml --limit 20 --json databaseId,status \
+              --jq "[.[] | select((.status==\"queued\" or .status==\"in_progress\" or .status==\"waiting\" or .status==\"pending\" or .status==\"requested\") and .databaseId != $GITHUB_RUN_ID)] | length")
+            if [ "$active" != "0" ]; then skip=true; fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+  build:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/state.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+      - run: npm run pipeline -- --out dist --state .cache/state.json --site "$SITE_URL"
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/upload-pages-artifact@v4
+        with: { path: dist }
+      - id: deployment
+        uses: actions/deploy-pages@v4
+  next:
+    needs: [gate, build]
+    if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          elapsed=$(( $(date +%s) - $(date -d "$started" +%s) ))
+          if [ $elapsed -lt 600 ]; then sleep $(( 600 - elapsed )); fi
+          others=$(gh run list -R "$GITHUB_REPOSITORY" --workflow pipeline.yml --limit 20 --json databaseId,status \
+            --jq "[.[] | select((.status==\"queued\" or .status==\"in_progress\" or .status==\"waiting\" or .status==\"pending\" or .status==\"requested\") and .databaseId != $GITHUB_RUN_ID)] | length")
+          if [ "$others" = "0" ]; then gh workflow run pipeline.yml -R "$GITHUB_REPOSITORY" --ref main; else echo "another run active ($others); not dispatching"; fi

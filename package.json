@@ -1,0 +1,25 @@
+{
+  "name": "thuammai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "pipeline": "tsx src/pipeline/main.ts",
+    "pipeline:fixtures": "tsx src/pipeline/main.ts --fixtures tests/fixtures/snapshot-2026-09-28T1443 --now 2026-09-28T14:43:00+07:00 --out dist --state .cache/fixture-state.json --fresh-state"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.0",
+    "eslint": "^10.11.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  }
+}

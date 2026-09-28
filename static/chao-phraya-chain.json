@@ -1,0 +1,11 @@
+{"source":"Chao Phraya main-stem stations upstream to downstream (ThaiWater oldcode). Display only in phase 1. FEWS discharge thresholds m3/s from bejranonda/flood2026 research.","data":[
+{"code":"C.2","th":"ค่ายจิรประวัติ (นครสวรรค์)","qThresholds":[2988,3362,3735]},
+{"code":"C.13","th":"ท้ายเขื่อนเจ้าพระยา (ชัยนาท)","qThresholds":[2176,2448,2720]},
+{"code":"C.3","th":"บ้านบางพุทรา (สิงห์บุรี)"},
+{"code":"C.7A","th":"บ้านบางแก้ว (อ่างทอง)"},
+{"code":"C.35","th":"บ้านป้อม (อยุธยา)"},
+{"code":"CPY011","th":"พระนครศรีอยุธยา"},
+{"code":"CPY012","th":"บางปะอิน (อยุธยา)"},
+{"code":"CPY014","th":"สะพานนวลฉวี (นนทบุรี)"},
+{"code":"C.12","th":"กรมชลประทานสามเสน (กทม.)"},
+{"code":"CPY015","th":"สะพานกรุงเทพ (กทม.)"}]}
