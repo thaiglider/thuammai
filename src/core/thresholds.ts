@@ -50,5 +50,5 @@ export const AREA = { minShare: 0.15 } as const;
 /** Minimum item counts below which a successful fetch is treated as a failure (outage masked as empty). */
 export const MIN_COUNT = { river: 300, rain: 1000, road: 100, canal: 100, dam: 20, longdo: 0, traffy: 0, forecast: 1, tmd: 0 } as const;
 
-/** Rendering-layer display cutoffs. */
-export const DISPLAY = { slopeTextMinMH: 0.02 } as const;
+/** Rendering-layer display cutoffs (never used by risk rules). */
+export const DISPLAY = { slopeTextMinMH: 0.02, nearestWaterMaxKm: 20 } as const;

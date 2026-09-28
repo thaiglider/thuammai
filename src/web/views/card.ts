@@ -3,14 +3,17 @@ import { LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
 import type { Assessment } from '../../core/risk';
 import type { Level } from '../../core/types';
 import { h } from '../lib/dom';
+import { mapHref } from '../lib/map-data';
 import { reasonLine } from '../lib/format';
 import { staleLine } from '../lib/freshness';
 import type { Place } from '../lib/places';
 
 export interface CardOpts {
   place: Place; a: Assessment; shownLevel: Level; generatedAt: string; now: Date; grey: boolean;
-  onShare(): void; onRemove(): void; onRename(name: string): void; compact?: boolean;
+  onShare(): void; onRemove(): void; onRename(name: string): void; compact?: boolean; coverage?: string | null;
 }
+
+export const FAR_WITH_COVERAGE = 'ระดับนี้คิดจากหลักฐานที่อยู่ไกลหรือฝน ให้ดูสภาพจริงรอบบ้านและประกาศของอำเภอ';
 
 export function renderCard(o: CardOpts): HTMLElement {
   const lvl = o.shownLevel;
@@ -22,7 +25,10 @@ export function renderCard(o: CardOpts): HTMLElement {
   const held = o.shownLevel > o.a.level
     ? h('p', { class: 'muted', 'data-testid': 'card-held' }, 'ข้อมูลล่าสุดต่ำลงแล้ว — ยังแสดงระดับเดิมไว้จนกว่าจะต่ำต่อเนื่อง 30 นาที')
     : null;
-  const conf = confidenceLine({ ...o.a, level: lvl });
+  // With a coverage line (which names the nearest station), the 'far' confidence sentence would repeat the
+  // distance; keep its guidance without it. Every other confidence line (e.g. level 0 "ไม่ได้แปลว่าปลอดภัย") stays.
+  const farDup = !!o.coverage && lvl > 0 && o.a.confidence === 'low' && o.a.coverage.water === 'far';
+  const conf = farDup ? FAR_WITH_COVERAGE : confidenceLine({ ...o.a, level: lvl });
   const actions = actionLines(lvl);
   const vehicle = vehicleLine(o.a.vehicleDepthCm);
   const why = h('details', { 'data-testid': 'card-why' },
@@ -46,6 +52,7 @@ export function renderCard(o: CardOpts): HTMLElement {
     h('p', { 'data-testid': 'card-headline' }, h('strong', {}, headlineText({ ...o.a, level: lvl }))),
     held,
     conf ? h('p', { class: 'muted', 'data-testid': 'card-confidence' }, conf) : null,
+    o.coverage ? h('p', { class: 'muted', 'data-testid': 'card-coverage' }, o.coverage) : null,
     folded ? null : actionList,
     folded ? null : vehicleLineEl,
     lvl === 4
@@ -58,6 +65,7 @@ export function renderCard(o: CardOpts): HTMLElement {
       : why,
     h('div', { class: 'actions' },
       h('button', { onclick: o.onShare, 'data-testid': 'card-share' }, 'แชร์'),
+      h('a', { class: 'btnlink', href: mapHref(o.place, location.hash), 'data-testid': 'card-map' }, 'ดูบนแผนที่'),
       h('button', { onclick: rename }, 'แก้ชื่อ'),
       h('button', { onclick: () => { if (confirm(`ลบ "${o.place.name}"?`)) o.onRemove(); } }, 'ลบ')),
     o.compact ? null : h('p', { class: 'muted' }, NO_OFFICIAL_ORDER));

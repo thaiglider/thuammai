@@ -9,14 +9,15 @@ import { clear, h } from '../lib/dom';
 import type { Env } from '../lib/env';
 import { freshness, staleLine } from '../lib/freshness';
 import { shareCaption } from '../lib/format';
+import { coverageLine } from '../lib/coverage';
 import { smooth, type HState } from '../lib/hysteresis';
-import { cleanName, decodePlacesFromHash, encodePlaces, importSummary, MAX_PLACES, mergePlaces, parseLatLonParams, parseLocationInput, placeKey, PRESET_NAMES, shareUrl, stripLatLon, type Place } from '../lib/places';
+import { cleanName, decodePlacesFromHash, encodePlaces, FULL_TH, importSummary, MAX_PLACES, mergePlaces, parseLatLonParams, parseLocationInput, placeKey, PRESET_NAMES, shareUrl, stripLatLon, type Place } from '../lib/places';
 import { buildIndex, search, type GazIndex, type GazRow } from '../lib/search';
 import type { Settings } from '../lib/settings';
 import { getJson, setJson, type KV } from '../lib/storage';
 import { renderCard } from './card';
 import { openQr, sharePlaces } from './share';
-import { refreshNavHashes, type ShellRefs } from './shell';
+import { refreshNavHashes, tabLink, type ShellRefs } from './shell';
 
 export interface AppCtx {
   shell: ShellRefs; store: DataStore; kv: KV; env: Env; settings: Settings;
@@ -47,7 +48,7 @@ export function loadPlaces(kv: KV): Place[] {
   return Array.isArray(stored) ? stored.filter((p) => p && typeof p.lat === 'number' && typeof p.lon === 'number') : [];
 }
 
-function currentPlaces(ctx: AppCtx): Place[] {
+export function currentPlaces(ctx: AppCtx): Place[] {
   return ctx.kv.persistent ? loadPlaces(ctx.kv) : decodePlacesFromHash(location.hash);
 }
 
@@ -60,8 +61,29 @@ function savePlaces(ctx: AppCtx, places: Place[]): void {
   refreshNavHashes(ctx.shell);
 }
 
+/** The naming prompt used by every way of adding a place (search, link, GPS, map pin). */
+export function askPlaceName(kv: KV, fallback: string): string | null {
+  const preset = PRESET_NAMES.find((n) => !loadPlaces(kv).some((p) => p.name === n)) ?? fallback;
+  const name = prompt('ตั้งชื่อจุดนี้ (เช่น บ้าน, บ้านพ่อแม่)', preset);
+  if (name === null) return null; // cancelled — add nothing
+  return cleanName(name || fallback);
+}
+
+export function addPlace(ctx: AppCtx, p: Place): 'added' | 'dup' | 'full' {
+  const places = currentPlaces(ctx);
+  if (places.some((q) => placeKey(q) === placeKey(p))) return 'dup';
+  if (places.length >= MAX_PLACES) return 'full';
+  savePlaces(ctx, mergePlaces(places, [p]));
+  return 'added';
+}
+
 function topAreas(areas: AreaRow[]): AreaRow[] {
   return areas.filter((a) => a.kind === 'province' && a.level >= 2).sort((a, b) => b.level - a.level || b.n2 / Math.max(1, b.N) - a.n2 / Math.max(1, a.N)).slice(0, 5);
+}
+
+/** The oldest of the snapshot time and any card's older-snapshot time: what "ณ HH:MM" may claim. */
+function oldestAt(metaAt: string, olderAts: readonly (string | null)[]): string {
+  return olderAts.reduce<string>((min, a) => (a && Date.parse(a) < Date.parse(min) ? a : min), metaAt);
 }
 
 function shareAllText(withShown: { p: Place; shownLevel: Level }[], generatedAt: string): string {
@@ -84,7 +106,7 @@ function announceRise(ctx: AppCtx): void {
     h('button', { onclick: () => banner.remove() }, 'ปิด'));
   ctx.shell.banners.prepend(banner);
   if (ctx.env.canNotify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    try { new Notification('ท่วมไหม', { body: 'ระดับความเสี่ยงของจุดที่คุณติดตามสูงขึ้น', icon: './icon.svg' }); } catch { /* ignore */ }
+    try { new Notification('ท่วมไหม', { body: 'ระดับความเสี่ยงของจุดที่คุณติดตามสูงขึ้น', icon: './icon-192.png' }); } catch { /* ignore */ }
   }
 }
 
@@ -104,9 +126,9 @@ export async function renderHome(ctx: AppCtx): Promise<void> {
     const content = h('div', {});
     const addPanel = renderAddPanel(ctx, (p) => {
       const cur = liveCtx!;
-      const places = mergePlaces(currentPlaces(cur), [p]);
-      savePlaces(cur, places);
-      void renderHome(cur);
+      const result = addPlace(cur, p);
+      if (result === 'added') void renderHome(cur);
+      return result;
     });
     main.append(content, addPanel);
     panelState = { main, content };
@@ -174,12 +196,16 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
   const provincesOk = await ctx.store.provinces().then(() => true, () => false);
   if (gen !== contentGen) return;
   if (!provincesOk) cards.append(loadErrorBanner(() => void renderHome(liveCtx ?? ctx)));
-  const assessed = await Promise.all(places.map(async (p) => ({ p, a: assessPoint(p.lat, p.lon, await ctx.store.inputFor(p.lat, p.lon, now)) })));
+  const assessed = await Promise.all(places.map(async (p) => {
+    const input = await ctx.store.inputFor(p.lat, p.lon, now);
+    const a = assessPoint(p.lat, p.lon, input);
+    return { p, a, olderAt: input.olderSnapshotAt, coverage: coverageLine(a, p.lat, p.lon, input.obs) };
+  }));
   if (gen !== contentGen) return;
 
   const hstates = getJson<Record<string, HState>>(ctx.kv, 'hyst', {});
   let rose = false;
-  const withShown = assessed.map(({ p, a }) => {
+  const withShown = assessed.map(({ p, a, olderAt, coverage }) => {
     const key = placeKey(p);
     const prev = hstates[key] ?? null;
     const next = smooth(prev, a.level, ctx.meta.generatedAt);
@@ -188,7 +214,7 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
     if (prev && prev.level > 0 && next.level > prev.level && next.level >= 2) rose = true;
     hstates[key] = next;
     const shownLevel: Level = ctx.kv.persistent ? next.level : a.level;
-    return { p, a, shownLevel };
+    return { p, a, shownLevel, olderAt, coverage };
   });
   setJson(ctx.kv, 'hyst', hstates);
   withShown.sort((x, y) => y.shownLevel - x.shownLevel);
@@ -196,11 +222,12 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
   if (rose) announceRise(ctx);
 
   const compact = withShown.length > 3;
-  for (const { p, a, shownLevel } of withShown) {
+  for (const { p, a, shownLevel, olderAt, coverage } of withShown) {
     const key = placeKey(p);
     cards.append(renderCard({
-      place: p, a, shownLevel, generatedAt: ctx.meta.generatedAt, now, grey: fr.grey, compact,
-      onShare: () => void doShare(ctx, [p], shareCaption(p.name, shownLevel, ctx.meta.generatedAt)),
+      place: p, a, shownLevel, generatedAt: olderAt ?? ctx.meta.generatedAt, now, grey: fr.grey || olderAt !== null, compact, coverage,
+      // A card built from an older snapshot shares that older time, never the newer meta time.
+      onShare: () => void doShare(ctx, [p], shareCaption(p.name, shownLevel, olderAt ?? ctx.meta.generatedAt)),
       onRemove: () => { savePlaces(ctx, currentPlaces(ctx).filter((q) => placeKey(q) !== key)); void renderHome(ctx); },
       onRename: (name) => { savePlaces(ctx, currentPlaces(ctx).map((q) => (placeKey(q) === key ? { ...q, name: cleanName(name) } : q))); void renderHome(ctx); },
     }));
@@ -210,7 +237,7 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
   if (compact) cards.append(h('p', { class: 'muted', 'data-testid': 'list-disclaimer' }, NO_OFFICIAL_ORDER));
   const qrMsg = h('p', { class: 'muted', role: 'status', 'data-testid': 'qr-msg' });
   cards.append(h('div', { class: 'actions' },
-    h('button', { 'data-testid': 'share-all', onclick: () => void doShare(ctx, places, shareAllText(withShown, ctx.meta.generatedAt)) }, 'ส่งจุดทั้งหมดให้ครอบครัว'),
+    h('button', { 'data-testid': 'share-all', onclick: () => void doShare(ctx, places, shareAllText(withShown, oldestAt(ctx.meta.generatedAt, withShown.map((w) => w.olderAt)))) }, 'ส่งจุดทั้งหมดให้ครอบครัว'),
     h('button', { onclick: () => { qrMsg.textContent = ''; openQr(shareUrl(ctx.base, places)).catch(() => { qrMsg.textContent = 'เปิด QR ไม่ได้ขณะออฟไลน์ — ลองใหม่เมื่อต่อเน็ต'; }); } }, 'QR code')), qrMsg);
 }
 
@@ -250,16 +277,18 @@ export function renderPlacesWithoutData(main: HTMLElement, kv: KV): void {
       h('p', { class: 'muted' }, 'ยังไม่มีข้อมูลเก็บไว้ในเครื่อง ไม่ได้แปลว่าปลอดภัย — ต่อเน็ตแล้วกด "ลองใหม่"')))));
 }
 
-function renderAddPanel(ctx: AppCtx, add: (p: Place) => void): HTMLElement {
+function renderAddPanel(ctx: AppCtx, add: (p: Place) => 'added' | 'dup' | 'full'): HTMLElement {
   const input = h('input', { type: 'search', id: 'q', 'aria-label': 'ค้นหาตำบล เขต อำเภอ หรือวางลิงก์แผนที่', placeholder: 'ค้นหาตำบล เขต อำเภอ หรือวางลิงก์แผนที่', autocomplete: 'off', 'data-testid': 'search' });
   const results = h('ul', { class: 'list', 'data-testid': 'search-results' });
-  const msg = h('p', { class: 'muted', role: 'status' });
+  const msg = h('p', { class: 'muted', role: 'status', 'data-testid': 'search-msg' });
   const choose = (name: string, lat: number, lon: number) => {
     if (!inThailand(lat, lon)) { msg.textContent = 'ตำแหน่งนี้อยู่นอกประเทศไทย'; return; }
-    const preset = PRESET_NAMES.find((n) => !loadPlaces(ctx.kv).some((p) => p.name === n)) ?? name;
-    const finalName = prompt('ตั้งชื่อจุดนี้ (เช่น บ้าน, บ้านพ่อแม่)', preset);
+    // Checked up front so a full list never bothers the user with the naming prompt first.
+    if (currentPlaces(ctx).length >= MAX_PLACES) { msg.textContent = FULL_TH; return; }
+    const finalName = askPlaceName(ctx.kv, name);
     if (finalName === null) return; // cancelled — don't add anything
-    add({ name: cleanName(finalName || name), lat, lon });
+    // Second check: guards a same-session race (e.g. another tab filled the list meanwhile).
+    if (add({ name: finalName, lat, lon }) === 'full') msg.textContent = FULL_TH;
   };
   // Shared by the type-ahead and the Nominatim search so a slow, stale response from either
   // can never overwrite a faster, newer one.
@@ -312,6 +341,8 @@ function renderAddPanel(ctx: AppCtx, add: (p: Place) => void): HTMLElement {
   return h('section', { class: 'card' },
     h('h2', {}, 'เพิ่มจุดที่ต้องการติดตาม'),
     input, results, msg,
-    h('div', { class: 'actions' }, gps, nominatim, notify),
+    h('div', { class: 'actions' }, gps,
+      tabLink('map', { class: 'btnlink', 'data-testid': 'pick-on-map' }, 'เลือกบนแผนที่'),
+      nominatim, notify),
     h('p', { class: 'muted' }, 'ข้อมูลสถานที่: © ผู้ร่วมพัฒนา OpenStreetMap · รายชื่อตำบล: OCHA COD-AB'));
 }

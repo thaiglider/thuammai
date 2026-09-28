@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } fro
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
+import { precacheAssets, type ViteManifest } from './src/build/precache.ts';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 
@@ -14,18 +15,28 @@ function copyStatic(): Plugin {
       const out = resolve(ROOT, 'dist/static');
       mkdirSync(out, { recursive: true });
       for (const f of ['gazetteer.json', 'provinces.json']) copyFileSync(resolve(ROOT, 'static', f), resolve(out, f));
+      // MapLibre is BSD-3-Clause: redistributing it in the map chunk requires its notice.
+      const lic = resolve(ROOT, 'dist/licenses');
+      mkdirSync(lic, { recursive: true });
+      copyFileSync(resolve(ROOT, 'node_modules/maplibre-gl/LICENSE.txt'), resolve(lic, 'maplibre-gl.txt'));
       writeServiceWorker(resolve(ROOT, 'dist'));
     },
   };
 }
 
 /** Fill the service worker's precache list and build id (see src/web/public/sw.js). Runs after
- *  static/ is copied, so everything listed exists. The build id hashes the contents of every
- *  precached file, so any change to the shell gives the worker a new cache name. The gazetteer
- *  (~440 KB) is deliberately not precached: it is cached on first use of the search box. */
+ *  static/ is copied, so everything listed exists. precached files = entry closure from the Vite
+ *  manifest (see src/build/precache.ts). The build id hashes the contents of every precached
+ *  file, so any change to the shell gives the worker a new cache name. The gazetteer (~440 KB) is
+ *  deliberately not precached: it is cached on first use of the search box. */
 function writeServiceWorker(dist: string): void {
-  const assets = readdirSync(resolve(dist, 'assets')).sort().map((f) => `assets/${f}`);
-  const files = ['index.html', ...assets, 'manifest.webmanifest', 'icon.svg', 'static/provinces.json'];
+  const manifest = JSON.parse(readFileSync(resolve(dist, '.vite/manifest.json'), 'utf8')) as ViteManifest;
+  const all = readdirSync(resolve(dist, 'assets')).sort().map((f) => `assets/${f}`);
+  // Only what the first page needs (entry JS/CSS and fonts). Lazy chunks — the map (MapLibre and
+  // its worker, ~0.5 MB) and the QR code — are cached on first use, so installing the worker
+  // never downloads the map for people who never open it.
+  const assets = precacheAssets(manifest, 'index.html', all);
+  const files = ['index.html', ...assets, 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png', 'static/provinces.json'];
   const hash = createHash('sha256');
   for (const f of files) hash.update(f).update(readFileSync(resolve(dist, f)));
   const swPath = resolve(dist, 'sw.js');
@@ -43,7 +54,7 @@ export default defineConfig({
   root: 'src/web',
   base: './',
   publicDir: 'public',
-  build: { outDir: '../../dist', emptyOutDir: true, target: 'es2022', sourcemap: false },
+  build: { outDir: '../../dist', emptyOutDir: true, target: 'es2022', sourcemap: false, manifest: true },
   preview: { port: 4173, strictPort: true },
   plugins: [copyStatic()],
 });

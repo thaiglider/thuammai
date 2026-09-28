@@ -4,6 +4,8 @@ export interface Place { name: string; lat: number; lon: number }
 export const MAX_NAME = 40;
 export const MAX_PLACES = 10;
 export const PRESET_NAMES = ['บ้าน', 'ที่ทำงาน', 'บ้านพ่อแม่', 'โรงเรียนลูก'] as const;
+/** Shown by every way of adding a place once the 10-place cap is hit (search, pin, share link uses its own wording via importSummary). */
+export const FULL_TH = `มีครบ ${MAX_PLACES} จุดแล้ว — ลบจุดเดิมก่อนจึงจะเพิ่มจุดใหม่ได้`;
 
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
 

@@ -7,7 +7,7 @@ import { freshness, staleLine } from '../lib/freshness';
 import { normalizeThai } from '../lib/search';
 import { applySettings, saveSettings, type Settings } from '../lib/settings';
 import type { AppCtx } from './home';
-import type { Tab } from './shell';
+import { tabLink, type Tab } from './shell';
 
 const SOURCE_TH: Record<string, string> = {
   river: 'ระดับน้ำแม่น้ำ — สสน. (ThaiWater)', rain: 'ฝน — สสน. (ThaiWater)', road: 'น้ำบนถนน กทม. — สสน. (ThaiWater)',
@@ -15,7 +15,7 @@ const SOURCE_TH: Record<string, string> = {
   traffy: 'ประชาชนแจ้ง — Traffy Fondue (ยังไม่ยืนยัน)', forecast: 'พยากรณ์ฝน — Open-Meteo', tmd: 'ประกาศเตือน — กรมอุตุนิยมวิทยา',
 };
 
-export async function renderPage(tab: Exclude<Tab, 'home'>, ctx: AppCtx): Promise<void> {
+export async function renderPage(tab: Exclude<Tab, 'home' | 'map'>, ctx: AppCtx): Promise<void> {
   const main = ctx.shell.main;
   clear(main);
   if (tab === 'areas') return areas(ctx, main);
@@ -119,11 +119,16 @@ function about(ctx: AppCtx, main: HTMLElement): void {
   const themeDark = h('button', { onclick: () => set({ theme: 'dark' }), 'aria-pressed': String(s.theme === 'dark') }, 'มืด');
   themeBtns.push({ el: themeAuto, val: 'auto' }, { el: themeLight, val: 'light' }, { el: themeDark, val: 'dark' });
   main.append(
+    h('h1', {}, 'เมนู'),
+    h('nav', { 'aria-label': 'เมนู', 'data-testid': 'menu' },
+      h('ul', { class: 'list' },
+        h('li', { class: 'row' }, tabLink('sources', {}, 'แหล่งข้อมูลและเกณฑ์')),
+        h('li', { class: 'row' }, h('a', { href: './p/index.html' }, 'ความเสี่ยงรายจังหวัดและรายเขต (ไม่ต้องใช้ JavaScript)')))),
     h('section', { 'data-testid': 'settings' },
-      h('h1', {}, 'ตั้งค่า'),
+      h('h2', {}, 'ตั้งค่า'),
       h('div', { class: 'actions', role: 'group', 'aria-label': 'ขนาดตัวอักษร' }, sizeA, sizeA2, sizeA3),
       h('div', { class: 'actions', role: 'group', 'aria-label': 'ธีม' }, themeAuto, themeLight, themeDark),
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.saveData, onchange: (e: Event) => set({ saveData: (e.target as HTMLInputElement).checked }) }), ' โหมดประหยัดเน็ต')),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.saveData, onchange: (e: Event) => set({ saveData: (e.target as HTMLInputElement).checked }) }), ' โหมดประหยัดเน็ต (ไม่โหลดแผนที่เอง)')),
     h('section', { 'data-testid': 'about' },
       h('h2', {}, 'เกี่ยวกับ'),
       h('p', {}, 'ท่วมไหม ทำโดยอาสาสมัคร ไม่ใช่หน่วยงานทางการ ใช้เพื่อประเมินสถานการณ์และเตรียมพร้อม — ทำตามประกาศของหน่วยงานเสมอ'),
@@ -136,7 +141,9 @@ function about(ctx: AppCtx, main: HTMLElement): void {
         h('li', {}, 'พยากรณ์ฝน: Open-Meteo (CC BY 4.0)'),
         h('li', {}, 'ประกาศเตือน: กรมอุตุนิยมวิทยา'),
         h('li', {}, 'ขอบเขตการปกครองและรายชื่อตำบล: OCHA COD-AB Thailand (CC BY-IGO)'),
-        h('li', {}, 'ค้นหาสถานที่: © ผู้ร่วมพัฒนา OpenStreetMap (ODbL)'),
+        h('li', {}, 'แผนที่พื้นฐาน: OpenFreeMap · © OpenMapTiles · ข้อมูลแผนที่ © ผู้ร่วมพัฒนา OpenStreetMap (ODbL)'),
+        h('li', {}, 'ค้นหาสถานที่: Nominatim · © ผู้ร่วมพัฒนา OpenStreetMap (ODbL)'),
+        h('li', {}, 'ไลบรารีแผนที่: MapLibre GL JS (BSD-3-Clause) — ', h('a', { href: './licenses/maplibre-gl.txt', 'data-testid': 'maplibre-license' }, 'ข้อความสัญญาอนุญาต')),
         h('li', {}, 'ฟอนต์: Noto Sans Thai Looped (SIL Open Font License)')),
       h('p', { class: 'muted' }, DISCLAIMER_TH)));
 }

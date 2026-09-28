@@ -1,11 +1,16 @@
 /* ท่วมไหม service worker.
  * - install: precaches the app shell (page, entry JS/CSS, fonts, manifest, icon, provinces) so the
- *   app opens offline after a single online visit. BUILD and PRECACHE are filled in at build time
- *   by the `thuammai-sw` plugin in vite.config.ts (BUILD = hash of the shell files), so every
- *   release gets a new shell cache and `activate` deletes the old ones.
+ *   app opens offline after a single online visit. Lazy chunks (map, QR code) are not precached;
+ *   they land in the shell cache by stale-while-revalidate the first time they are used. BUILD and
+ *   PRECACHE are filled in at build time by vite.config.ts (BUILD = hash of the precached files),
+ *   so every release gets a new shell cache and `activate` deletes the old ones.
  * - data/ and p/ and navigations: network-first, cached under origin+pathname.
  * - everything else same-origin: stale-while-revalidate from the shell cache.
- * - data/meta.json with swKill: true unregisters this worker and clears every cache. */
+ * - data/meta.json with swKill: true unregisters this worker and clears every cache.
+ * - cross-origin requests are never intercepted: basemap style, sprites, glyphs and tiles from
+ *   tiles.openfreemap.org (and Nominatim) go straight to the network with their own HTTP caching.
+ *   We deliberately do not cache map tiles — the set is unbounded — so the map needs a connection;
+ *   offline, the map tab shows the text list of flagged stations instead. */
 const BUILD = 'dev'; // @build
 const PRECACHE = []; // @precache
 const SHELL = `shell-${BUILD}`;

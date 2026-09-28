@@ -20,6 +20,16 @@ export function fetchLoader(base: string, fetchImpl: typeof fetch = fetch.bind(g
   };
 }
 
+/** When files came from a different snapshot than meta.json — e.g. the service worker answered an
+ *  obs request from its cache after a network timeout — return the oldest generatedAt involved
+ *  (meta's own included); null when everything matches or meta is not known yet. */
+export function snapshotMismatch(metaAt: string | null, fileAts: readonly (string | undefined)[]): string | null {
+  if (!metaAt) return null;
+  const all = [metaAt, ...fileAts.filter((a): a is string => typeof a === 'string')];
+  if (all.every((a) => a === metaAt)) return null;
+  return all.reduce((min, a) => (Date.parse(a) < Date.parse(min) ? a : min));
+}
+
 export class DataStore {
   private cache = new Map<string, Promise<Fetched<unknown>>>();
   private gen: string | null = null;
@@ -65,26 +75,47 @@ export class DataStore {
     return (await this.get<{ data: ProvinceGeo[] }>('static/provinces.json')).data.data;
   }
 
-  async inputFor(lat: number, lon: number, now: Date): Promise<RiskInput & { reportWindowH: number }> {
+  /** Nationwide stations at level ≥2 (the map's default layer). */
+  async flagged(): Promise<{ generatedAt: string; obs: Observation[] }> {
+    return (await this.get<{ generatedAt: string; obs: Observation[] }>('data/obs/flagged.json')).data;
+  }
+
+  /** One province's stations (shares the cache entry with inputFor). */
+  async provinceObs(code: string): Promise<{ generatedAt: string; obs: Observation[] }> {
+    return (await this.get<{ generatedAt: string; obs: Observation[] }>(`data/obs/${code}.json`)).data;
+  }
+
+  async events(): Promise<{ generatedAt: string; windowH: number; events: FloodEvent[] }> {
+    return (await this.get<{ generatedAt: string; windowH: number; events: FloodEvent[] }>('data/events.json')).data;
+  }
+
+  async inputFor(lat: number, lon: number, now: Date): Promise<RiskInput & { reportWindowH: number; olderSnapshotAt: string | null }> {
     // A missing provinces file must not reject the whole card: with no provinces the input is
     // marked incomplete, which yields the safe level-0 "ข้อมูลไม่ครบ" display for the place.
     const all = await this.provinces().catch(() => null);
     const provs = all ? provincesNear(lat, lon, all, 10) : [];
     const [obsResults, events, forecast] = await Promise.all([
-      Promise.allSettled(provs.map((p) => this.get<{ obs: Observation[]; rain0: Rain0[] }>(`data/obs/${p}.json`).then((r) => ({ p, ...r.data })))),
-      this.get<{ events: FloodEvent[]; windowH: number }>('data/events.json').then((r) => r.data).catch(() => null),
-      this.get<{ points: ForecastPoint[] }>('data/forecast.json').then((r) => r.data).catch(() => null),
+      Promise.allSettled(provs.map((p) => this.get<{ generatedAt: string; obs: Observation[]; rain0: Rain0[] }>(`data/obs/${p}.json`).then((r) => ({ p, ...r.data })))),
+      this.get<{ generatedAt: string; events: FloodEvent[]; windowH: number }>('data/events.json').then((r) => r.data).catch(() => null),
+      this.get<{ generatedAt: string; points: ForecastPoint[] }>('data/forecast.json').then((r) => r.data).catch(() => null),
     ]);
     const obs: Observation[] = [];
     const rain0: ZeroRain[] = [];
+    const ats: string[] = [];
     let incomplete = !events || !forecast || provs.length === 0;
+    if (events) ats.push(events.generatedAt);
+    if (forecast) ats.push(forecast.generatedAt);
     for (const r of obsResults) {
       if (r.status === 'rejected') { incomplete = true; continue; }
+      ats.push(r.value.generatedAt);
       obs.push(...r.value.obs);
       for (const [a, b] of r.value.rain0) rain0.push({ lat: a, lon: b, prov: r.value.p });
     }
+    // Mixing snapshots silently could show "no signal" from stale files: mark incomplete (so the
+    // level can never be 1) and report the oldest time so the card is greyed with it.
+    const olderSnapshotAt = snapshotMismatch(this.gen, ats);
     return {
-      obs, rain0, now, incomplete,
+      obs, rain0, now, incomplete: incomplete || olderSnapshotAt !== null, olderSnapshotAt,
       events: events?.events ?? [], forecast: forecast?.points ?? [], reportWindowH: events?.windowH ?? 0,
     };
   }

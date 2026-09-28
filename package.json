@@ -25,6 +25,7 @@
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.19.0",
     "eslint": "^10.11.0",
+    "maplibre-gl": "^6.11.2",
     "qrcode-generator": "^2.0.4",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3",

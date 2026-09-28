@@ -1,5 +1,6 @@
 import { h } from '../lib/dom';
 import type { Env } from '../lib/env';
+import { trapFocus } from '../lib/focus';
 
 export async function sharePlaces(env: Env, url: string, text: string): Promise<'shared' | 'line' | 'copied' | 'failed' | 'cancelled'> {
   if (env.canShare && !env.isLine) {
@@ -31,12 +32,14 @@ export async function openQr(url: string): Promise<void> {
     document.removeEventListener('keydown', onKeydown);
     opener?.focus();
   };
-  const onKeydown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') close();
-  };
   const closeBtn = h('button', { onclick: close }, 'ปิด');
   const sheet = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'QR code', onclick: (e: Event) => { if (e.target === sheet) close(); } },
     h('div', {}, h('h2', {}, 'สแกนเพื่อเพิ่มจุดเดียวกันในเครื่องอื่น'), img, h('p', { class: 'muted' }, url), closeBtn));
+  const trap = trapFocus(sheet);
+  const onKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') close();
+    else trap(e);
+  };
   document.body.append(sheet);
   document.addEventListener('keydown', onKeydown);
   closeBtn.focus();

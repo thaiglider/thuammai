@@ -4,9 +4,12 @@ export interface GazIndex { rows: GazRow[]; norm: string[]; names: Map<string, s
 
 const PREFIX = /^(จังหวัด|จ\.|อำเภอ|อ\.|เขต|ตำบล|ต\.|แขวง|กิ่งอำเภอ)\s*/;
 const TONES = /[่-๋]/g;
+// Nikhahit + sara aa (ํ + า) looks identical to sara am (ำ) and is a common way it gets typed.
+const SARA_AM = /ํา/g;
 
 export function normalizeThai(s: string): string {
-  let t = s.trim().toLowerCase();
+  // Fold ํา → ำ first: PREFIX spells อำเภอ/ตำบล with sara am, so it must see the folded form.
+  let t = s.trim().toLowerCase().replace(SARA_AM, 'ำ');
   let prev = '';
   while (prev !== t) { prev = t; t = t.replace(PREFIX, ''); }
   return t.replace(/\s+/g, '').replace(TONES, '');

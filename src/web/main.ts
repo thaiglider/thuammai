@@ -6,10 +6,11 @@ import { effectiveNow, freshness } from './lib/freshness';
 import { applySettings, loadSettings } from './lib/settings';
 import { browserStorage } from './lib/storage';
 import { loadErrorBanner, renderHome, renderPlacesWithoutData, warmCache, type AppCtx } from './views/home';
+import { renderMapTab } from './views/map';
 import { renderPage } from './views/pages';
 import { renderShell, type Tab } from './views/shell';
 
-const TAB_SET: readonly Tab[] = ['home', 'areas', 'help', 'sources', 'about'];
+const TAB_SET: readonly Tab[] = ['home', 'map', 'areas', 'help', 'sources', 'about'];
 export function currentTab(): Tab {
   const t = new URLSearchParams(location.search).get('tab') as Tab | null;
   return t && TAB_SET.includes(t) ? t : 'home';
@@ -94,6 +95,7 @@ async function boot(): Promise<void> {
     const ctx: AppCtx = { shell, store, kv, env, settings, meta: meta!, serverDate, now: () => effectiveNow(deviceNow(), serverDate, meta!.generatedAt), online: () => navigator.onLine, base };
     try {
       if (tab === 'home') await renderHome(ctx);
+      else if (tab === 'map') await renderMapTab(ctx);
       else await renderPage(tab, ctx);
     } catch {
       // Any other failed fetch while drawing: say so and offer a retry rather than leave a blank
