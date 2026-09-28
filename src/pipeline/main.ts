@@ -9,8 +9,10 @@ import { FRESH_MIN, HELD_MAX_H, HISTORY } from '../core/thresholds';
 import { ageMin, toIso07 } from '../core/time';
 import type { Observation, RawObs, SourceHealth } from '../core/types';
 import { collectAll, type Collected } from './collect';
+import { currentEvalLog, emptyEvalLog, pruneEvalLog, recordSnapshot } from './eval-log';
 import { fixtureFetcher, liveFetcher, type Fetcher } from './fetcher';
 import { buildOutputs } from './publish';
+import { loadSkill } from './skill-input';
 import { emptyState, loadState, saveState, type PipelineState } from './state';
 import { loadStaticData } from './static-data';
 
@@ -18,6 +20,8 @@ export interface RunOpts {
   out: string; fixtures?: string; now?: string; state: string; site?: string; freshState?: boolean;
   /** Overrides the fetcher chosen from `fixtures` (tests). */
   fetcher?: Fetcher;
+  /** Path of skill.json downloaded from the newest archive Release (optional). */
+  skill?: string;
 }
 
 /** Refuse to write into a directory that is the filesystem root, the user's home, the
@@ -67,8 +71,14 @@ export async function runPipeline(opts: RunOpts): Promise<RunResult> {
   const obs = computeStatus([...raws, ...held], { now, history: st.history, historyH, missing });
   rememberLastSeen(st, raws, obs, now);
 
+  // A malformed log, or one recorded under other thresholds, restarts (levels are rule-specific).
+  st.evalLog = currentEvalLog(st.evalLog) ?? emptyEvalLog();
+  recordSnapshot(st.evalLog, obs, nowMs);
+  pruneEvalLog(st.evalLog, nowMs);
+
   st.savedAt = now.toISOString();
-  const files = buildOutputs({ now, obs, collected: c, sd, history: st.history, historyH, state: st });
+  const skill = await loadSkill(opts.skill, opts.site);
+  const files = buildOutputs({ now, obs, collected: c, sd, history: st.history, historyH, state: st, skill });
   for (const sub of ['data', 'p']) rmSync(join(opts.out, sub), { recursive: true, force: true });
   for (const [rel, content] of files) {
     const full = join(opts.out, rel);
@@ -118,11 +128,12 @@ async function cli() {
       state: { type: 'string', default: '.cache/state.json' },
       site: { type: 'string' },
       'fresh-state': { type: 'boolean', default: false },
+      skill: { type: 'string' },
     },
   });
   const r = await runPipeline({
     out: values.out!, fixtures: values.fixtures, now: values.now, state: values.state!,
-    site: values.site, freshState: values['fresh-state'],
+    site: values.site, freshState: values['fresh-state'], skill: values.skill,
   });
   for (const h of r.health) {
     console.log(`${h.ok ? 'OK ' : 'ERR'} ${h.id.padEnd(8)} n=${String(h.count).padStart(5)} lag=${h.lagMin ?? '-'}m${h.error ? ` ${h.error}` : ''}${h.carriedFrom ? ` (carried from ${h.carriedFrom})` : ''}`);

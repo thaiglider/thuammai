@@ -1,0 +1,92 @@
+name: evaluate
+on:
+  schedule:
+    - cron: '0 23 * * *'   # 06:00 Asia/Bangkok
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: evaluate
+  cancel-in-progress: false
+env:
+  SITE_URL: https://thaiglider.github.io/thuammai
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.run.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      # Caches are repo-wide: this restores the newest state pipeline.yml saved on main.
+      # Restore only — a state-* cache saved here would roll the pipeline's history back.
+      # Missing cache → `npm run evaluate` falls back to $SITE_URL/data/_state.json.
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache/state.json
+          key: state-evaluate-${{ github.run_id }}
+          restore-keys: state-
+      # Only "no archive Release yet" starts from empty tallies. Once a Release exists its tallies.json
+      # is the running 30-day record: failing to fetch it (API/network error, missing asset) fails the
+      # job before anything is uploaded, so the site keeps the last good skill.json instead of a
+      # record silently restarted from one day.
+      - name: Previous tallies from the newest archive Release
+        id: tallies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .cache/eval-in
+          # Newest archive Release that actually holds tallies.json (a Release left without it by a
+          # failed upload must not block every later run). Any API failure here fails the job.
+          tags=$(gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '[.[].tagName | select(startswith("archive-"))] | sort | reverse | .[]') || exit 1
+          tag=""
+          for t in $tags; do
+            assets=$(gh release view "$t" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name') || exit 1
+            if printf '%s\n' "$assets" | grep -qx 'tallies.json'; then tag="$t"; break; fi
+          done
+          if [ -z "$tag" ]; then
+            echo "no archive release with tallies.json yet: starting from empty tallies"
+            exit 0
+          fi
+          if ! gh release download "$tag" -R "$GITHUB_REPOSITORY" -p tallies.json -D .cache/eval-in --clobber; then
+            echo "::error::could not download tallies.json from $tag; refusing to restart the record from empty tallies"
+            exit 1
+          fi
+          echo "require=1" >> "$GITHUB_OUTPUT"
+      - id: run
+        env:
+          REQUIRE_TALLIES: ${{ steps.tallies.outputs.require }}
+        run: |
+          npm run evaluate -- --state .cache/state.json --site "$SITE_URL" --tallies .cache/eval-in/tallies.json ${REQUIRE_TALLIES:+--require-tallies} --out .cache/eval-out --tag-file .cache/eval-tag
+          echo "tag=$(cat .cache/eval-tag)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evaluate-out
+          path: .cache/eval-out
+          retention-days: 7
+          if-no-files-found: error
+  publish:
+    needs: evaluate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: evaluate-out
+          path: out
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.evaluate.outputs.tag }}
+        run: |
+          case "$TAG" in archive-[0-9][0-9][0-9][0-9]-[0-9][0-9]) ;; *) echo "unexpected tag '$TAG'"; exit 1 ;; esac
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "$TAG" --latest=false \
+              --notes "ผลประเมินความแม่นรายวัน (skill.json, tallies.json) และสำเนา history รายวัน — สร้างอัตโนมัติโดย evaluate.yml"
+          fi
+          gh release upload "$TAG" out/* -R "$GITHUB_REPOSITORY" --clobber

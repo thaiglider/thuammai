@@ -1,7 +1,7 @@
 import { AttributionControl, GPUInitializationError, Map as MapLibreMap, NavigationControl, Popup, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { creditsToAdd, mapErrorStage, MAP_CREDIT, type ExtraLayer, type FC } from '../lib/map-data';
+import { creditsToAdd, mapErrorStage, MAP_CREDIT, thaiTextField, type ExtraLayer, type FC } from '../lib/map-data';
 
 // Same-origin bundled worker (Vite `?worker&url`), so the CSP needs no third-party script origin.
 setWorkerUrl(workerUrl);
@@ -52,6 +52,21 @@ function circle(id: string, source: SourceId, visible: boolean, kind?: string, s
   } as LayerSpec;
 }
 
+/** Rewrites every basemap label that shows a name to prefer Thai; returns the rewritten layer ids. */
+function preferThaiLabels(map: MapLibreMap): string[] {
+  const done: string[] = [];
+  for (const layer of map.getStyle()?.layers ?? []) {
+    if (layer.type !== 'symbol') continue;
+    const next = thaiTextField(map.getLayoutProperty(layer.id, 'text-field'));
+    if (!next) continue;
+    // `next` is a plain JSON expression; setLayoutProperty's value type is normally narrowed per
+    // property from the literal name, which a runtime-built layer id/expression can't satisfy.
+    map.setLayoutProperty(layer.id, 'text-field', next as any);
+    done.push(layer.id);
+  }
+  return done;
+}
+
 export function createMapCanvas(o: CanvasOpts): MapCanvas {
   let map: MapLibreMap;
   try {
@@ -91,6 +106,9 @@ export function createMapCanvas(o: CanvasOpts): MapCanvas {
   let loaded = false;
   map.on('load', () => {
     loaded = true;
+    const thai = preferThaiLabels(map);
+    o.container.dataset.thLabels = String(thai.length);
+    if (thai.length) o.container.dataset.labelField = JSON.stringify(map.getLayoutProperty(thai[0]!, 'text-field'));
     for (const id of ['extra', 'reports', 'places', 'flagged'] as const) map.addSource(id, { type: 'geojson', data: (data.get(id) ?? EMPTY) as GeoData });
     for (const k of KINDS) map.addLayer(circle(`extra-${k}`, 'extra', visible.has(k), k));
     map.addLayer(circle('reports', 'reports', visible.has('reports')));

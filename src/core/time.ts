@@ -87,3 +87,13 @@ export function fmtDateTime(iso: string): string {
   const p = bangkokParts(iso);
   return `${p.d} ${TH_MONTHS[p.m]} ${p.y + 543} ${pad(p.h)}:${pad(p.mi)} น.`;
 }
+
+/** A Bangkok calendar day "YYYY-MM-DD" as "28 ก.ย. 2569"; null when it is not such a day. */
+export function fmtDay(day: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return null;
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return `${d} ${TH_MONTHS[mo - 1]} ${Number(m[1]) + 543}`;
+}

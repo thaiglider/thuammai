@@ -1,5 +1,6 @@
 import { provincesNear } from '../../core/geo';
 import type { RiskInput, ZeroRain } from '../../core/risk';
+import { isSkillFile, type SkillFile } from '../../core/skill';
 import type { FloodEvent, ForecastPoint, Level, Observation, ProvinceGeo, Rain0, SourceHealth, TmdWarning } from '../../core/types';
 
 export const SUPPORTED_SCHEMA = 1;
@@ -87,6 +88,16 @@ export class DataStore {
 
   async events(): Promise<{ generatedAt: string; windowH: number; events: FloodEvent[] }> {
     return (await this.get<{ generatedAt: string; windowH: number; events: FloodEvent[] }>('data/events.json')).data;
+  }
+
+  /** Past accuracy (evaluate.yml); null when missing or not a skill file — the page then says so. */
+  async skill(): Promise<SkillFile | null> {
+    try {
+      const { data } = await this.get<unknown>('data/skill.json');
+      return isSkillFile(data) ? data : null;
+    } catch {
+      return null;
+    }
   }
 
   async inputFor(lat: number, lon: number, now: Date): Promise<RiskInput & { reportWindowH: number; olderSnapshotAt: string | null }> {

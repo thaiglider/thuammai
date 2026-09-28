@@ -52,3 +52,47 @@ export const MIN_COUNT = { river: 300, rain: 1000, road: 100, canal: 100, dam: 2
 
 /** Rendering-layer display cutoffs (never used by risk rules). */
 export const DISPLAY = { slopeTextMinMH: 0.02, nearestWaterMaxKm: 20 } as const;
+
+/** Skill evaluation (evaluate.yml) — how we MEASURE the rules; never read by risk.ts/station.ts. */
+export const EVAL = {
+  /** The spike/backtest region (Bangkok and vicinity), docs/research/backtest/2026-09-28-results.md. */
+  bbox: { s: 13.55, n: 14.05, w: 100.3, e: 100.95 },
+  /** Stations up to this many degrees outside the box can still decide a point inside it (river ≤10 km). */
+  marginDeg: 0.1,
+  /** Control grid: 0.01° points closer than gridNearKm to a fresh road/canal station. */
+  gridStepDeg: 0.01,
+  gridNearKm: 3,
+  /** A grid point is "truly flooded" when a report is within this distance. */
+  truthKm: 1,
+  /** Road-sensor truth: ≥roadWetCm for a run lasting ≥roadWetMin that overlaps T ± roadTruthMin
+   *  (readings looked at within T ± roadLookMin). */
+  roadWetCm: ROAD.l3,
+  roadWetMin: 60,
+  roadTruthMin: 60,
+  roadLookMin: 120,
+  /** Reports filed up to this long after T still count as flooding at T. */
+  reportLeadMin: 60,
+  /** One evaluation snapshot per clock hour, kept this long in the pipeline state. */
+  snapEveryMin: 60,
+  keepH: 60,
+  /** Daily tallies kept in tallies.json. */
+  tallyDays: 35,
+  /** Below this many samples a ratio is published as null ("ข้อมูลยังไม่พอ"). */
+  minN: 30,
+  /** Samples are counted per hourly snapshot, so one storm or one report yields many strongly
+   *  autocorrelated samples. A ratio is also null unless it rests on independent evidence: at least
+   *  minDays distinct days AND at least this many distinct units — for a hit rate the distinct truth
+   *  cases (report ids / wet road sensors), for a precision the distinct warned places (0.01° grid
+   *  points / road sensors). */
+  minDays: 3,
+  minTruthUnits: { reports: 10, road: 5 },
+  minFlagUnits: { reports: 10, road: 5 },
+  /** The page says "ดีกว่าการเดาสุ่ม" only from this lift; below liftWorse it says worse than chance. */
+  liftBetter: 1.1,
+  liftWorse: 0.9,
+  /** The sources page says the result is old from this many days. */
+  staleDays: 3,
+} as const;
+
+/** Tracking targets shown on the sources page (spec §7) — information, not a deploy gate. */
+export const SKILL_TARGET = { level: 3, precision: 0.5, hit: 0.6 } as const;

@@ -1,4 +1,5 @@
 import { AREA_NOTE_TH, DISCLAIMER_TH, EMERGENCY, LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
+import { SIGNAL_SETS, TRUTHS, type SkillFile } from '../../core/skill';
 import { BKK_METRO, DAM, FRESH_MIN, THRESHOLDS_VERSION } from '../../core/thresholds';
 import { fmtDateTime } from '../../core/time';
 import type { AreaRow } from '../lib/data';
@@ -6,6 +7,7 @@ import { clear, h } from '../lib/dom';
 import { freshness, staleLine } from '../lib/freshness';
 import { normalizeThai } from '../lib/search';
 import { applySettings, saveSettings, type Settings } from '../lib/settings';
+import { hitText, LEVEL_KEY_TH, precText, SIGNAL_TH, SKILL_NONE_TH, SKILL_NOTE_TH, staleText, targetText, TRACK_TH, trackState, TRUTH_TH, windowText } from '../lib/skill-text';
 import type { AppCtx } from './home';
 import { tabLink, type Tab } from './shell';
 
@@ -83,6 +85,7 @@ function sources(ctx: AppCtx, main: HTMLElement): void {
       h('td', {}, SOURCE_TH[s.id] ?? s.id),
       h('td', {}, s.ok ? `ปกติ · ${s.count} รายการ${s.lagMin !== null ? ` · ช้า ${s.lagMin} นาที` : ''}`
         : s.carriedFrom ? `ใช้ข้อมูลค้างจาก ${fmtDateTime(s.carriedFrom)} (${s.error ?? 'ดึงไม่สำเร็จ'})` : `ดึงไม่สำเร็จ (${s.error ?? ''})`)))));
+  const skillBox = h('section', { 'data-testid': 'skill' }, h('h2', {}, 'ความแม่นย้อนหลัง'), h('p', { class: 'muted' }, 'กำลังโหลด…'));
   main.append(h('section', {},
     h('h1', {}, 'แหล่งข้อมูลและเกณฑ์'),
     h('p', {}, `อัปเดตล่าสุด ${fmtDateTime(m.generatedAt)} · เกณฑ์รุ่น ${THRESHOLDS_VERSION}${m.thresholdsVersion !== THRESHOLDS_VERSION ? ` (ข้อมูลใช้รุ่น ${m.thresholdsVersion})` : ''}`),
@@ -98,7 +101,48 @@ function sources(ctx: AppCtx, main: HTMLElement): void {
       h('li', {}, `เขื่อน: ปริมาณน้ำ ≥${DAM.l2}% ของความจุ = เฝ้าระวัง`),
       h('li', {}, `ข้อมูลเก่ากว่าเกณฑ์ไม่ถูกนับ (แม่น้ำ ${FRESH_MIN.river / 60} ชม. · ฝน ${FRESH_MIN.rain / 60} ชม. · ถนน ${FRESH_MIN.road / 60} ชม. · คลอง ${FRESH_MIN.canal / 60} ชม.)`),
       h('li', {}, 'ระดับ "อันตราย" ต้องมีหลักฐานโดยตรงใกล้จุด ฝนหรือพยากรณ์อย่างเดียวไม่ถึงระดับนี้')),
-    ...(m.tmd.length ? [h('h2', {}, 'ประกาศกรมอุตุนิยมวิทยา'), ...m.tmd.map((w) => h('div', { class: 'card' }, h('strong', {}, w.title), h('p', {}, w.body)))] : [])));
+    ...(m.tmd.length ? [h('h2', {}, 'ประกาศกรมอุตุนิยมวิทยา'), ...m.tmd.map((w) => h('div', { class: 'card' }, h('strong', {}, w.title), h('p', {}, w.body)))] : []),
+    skillBox));
+  void ctx.store.skill().then((s) => renderSkill(skillBox, s, ctx.now()));
+}
+
+function renderSkill(box: HTMLElement, s: SkillFile | null, now: Date): void {
+  clear(box);
+  box.append(h('h2', {}, 'ความแม่นย้อนหลัง'));
+  if (!s) {
+    box.append(h('p', { 'data-testid': 'skill-none' }, SKILL_NONE_TH));
+    return;
+  }
+  const stale = staleText(s, now);
+  box.append(
+    h('p', { class: 'muted' }, SKILL_NOTE_TH),
+    h('p', {}, `คำนวณเมื่อ ${fmtDateTime(s.generatedAt)}${s.thresholdsVersion !== THRESHOLDS_VERSION ? ` · คำนวณด้วยเกณฑ์รุ่น ${s.thresholdsVersion}` : ''}`),
+    ...(stale ? [h('p', { class: 'muted', 'data-testid': 'skill-stale' }, stale)] : []),
+    h('p', { 'data-testid': 'skill-target' }, targetText(s.target)));
+  for (const key of ['7', '30'] as const) {
+    const w = s.windows[key];
+    const card = h('div', { class: 'card', 'data-testid': `skill-${key}` }, h('h3', {}, windowText(w, key)),
+      h('p', { class: 'muted', 'data-testid': `skill-${key}-signals` }, `ระดับที่วัด: ${SIGNAL_TH.all}`));
+    for (const truth of TRUTHS) {
+      card.append(
+        h('h4', {}, TRUTH_TH[truth]),
+        h('p', { 'data-testid': `skill-${key}-${truth}-track` }, `เทียบเป้า: ${TRACK_TH[trackState(w, truth, s.target)]}`));
+      for (const lk of ['3', '2'] as const) {
+        const m = w.truths[truth].all[lk];
+        card.append(h('p', {}, h('strong', {}, LEVEL_KEY_TH[lk]), h('br'), hitText(m, s.minN, w.evidence[truth], truth), h('br'), precText(m, s.minN, truth)));
+      }
+      const per = h('details', {}, h('summary', {}, 'แยกตามชนิดสัญญาณ'));
+      for (const sig of SIGNAL_SETS) {
+        if (sig === 'all') continue;
+        for (const lk of ['3', '2'] as const) {
+          const m = w.truths[truth][sig][lk];
+          per.append(h('p', {}, `${SIGNAL_TH[sig]} · ${LEVEL_KEY_TH[lk]}: ${hitText(m, s.minN, w.evidence[truth], truth)} · ${precText(m, s.minN, truth)}`));
+        }
+      }
+      card.append(per);
+    }
+    box.append(card);
+  }
 }
 
 function about(ctx: AppCtx, main: HTMLElement): void {

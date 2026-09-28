@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "pipeline": "tsx src/pipeline/main.ts",
-    "pipeline:fixtures": "tsx src/pipeline/main.ts --fixtures tests/fixtures/snapshot-2026-09-28T1443 --now 2026-09-28T14:43:00+07:00 --out dist --state .cache/fixture-state.json --fresh-state"
+    "pipeline:fixtures": "tsx src/pipeline/main.ts --fixtures tests/fixtures/snapshot-2026-09-28T1443 --now 2026-09-28T14:43:00+07:00 --out dist --state .cache/fixture-state.json --fresh-state",
+    "evaluate": "tsx src/pipeline/evaluate.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

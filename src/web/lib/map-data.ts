@@ -138,6 +138,18 @@ const REPORTER_TH: Record<Reporter, string> = {
 };
 const present = (xs: (string | null)[]): string[] => xs.filter((x): x is string => !!x);
 
+/** OpenFreeMap liberty labels places with `name_en` first ("The Owl Market"); we prefer Thai. */
+export const TH_TEXT_FIELD = ['coalesce', ['get', 'name:th'], ['get', 'name'], ['get', 'name_en']] as const;
+// A name reference in a token string ("{name_en}") or an expression ("name:latin" inside ["get", …]).
+const NAME_REF = /(^|[{"])name(?:[_:][a-z]+)?(?=[}"]|$)/m;
+
+/** The Thai-first text-field for a symbol layer that shows a name; null to leave the layer alone. */
+export function thaiTextField(current: unknown): unknown[] | null {
+  if (current === undefined || current === null || current === '') return null;
+  const text = typeof current === 'string' ? current : JSON.stringify(current);
+  return NAME_REF.test(text) ? (JSON.parse(JSON.stringify(TH_TEXT_FIELD)) as unknown[]) : null;
+}
+
 /** Lines under the station name in a popup: level word, value, time, source. */
 export function stationPopupLines(o: Observation, now: Date, grey: boolean): string[] {
   const when = o.held ? `ค้างจาก ${fmtTime(o.held.lastFreshAt)}` : `วัดเมื่อ ${relativeAge(o.t, now)} (${fmtTime(o.t)})`;

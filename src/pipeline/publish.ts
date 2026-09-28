@@ -12,6 +12,8 @@ import type { StaticData } from './static-data';
 export interface PublishInput {
   now: Date; obs: Observation[]; collected: Collected; sd: StaticData;
   history: History; historyH: number; state: PipelineState;
+  /** Serialized, validated skill.json (see loadSkill); omitted from the output when null/undefined. */
+  skill?: string | null;
 }
 
 const CHAIN_PROVS = new Set(['60', '18', '17', '15', '14', '12', '10']);
@@ -106,6 +108,7 @@ export function buildOutputs(inp: PublishInput): Map<string, string> {
     put(`data/history/${prov}.json`, { ...head, series });
   }
 
+  if (inp.skill) files.set('data/skill.json', inp.skill);
   put('data/meta.json', { ...head, historyH: Math.round(inp.historyH * 10) / 10, sources: c.health, tmd: c.tmd, swKill: false });
   put('data/_state.json', inp.state);
   files.set('.nojekyll', '');

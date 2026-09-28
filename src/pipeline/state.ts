@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { emptyHistory, type History } from '../core/history';
 import type { RawObs, SourceId } from '../core/types';
+import type { EvalLog } from './eval-log';
 
 export interface PipelineState {
   v: 1;
@@ -18,6 +19,8 @@ export interface PipelineState {
   /** Last fresh raw reading of every station whose level was ≥3, so a station that vanishes
    *  from its feed can still be published as held (spec §4 "stale/หาย"). Optional for legacy states. */
   lastSeen?: Record<string, RawObs>;
+  /** Hourly evaluation snapshots for evaluate.yml (Plan C). Optional for legacy states. */
+  evalLog?: EvalLog;
 }
 
 export const emptyState = (): PipelineState => ({ v: 1, savedAt: null, history: emptyHistory(), lastGood: {} });

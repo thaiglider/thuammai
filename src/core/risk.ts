@@ -45,6 +45,13 @@ export function remainingForecastMm(f: ForecastPoint, now: Date): number[] | nul
   return f.mm.slice(Math.max(0, Math.floor(elapsedMs / 3600e3)));
 }
 
+/** Raw (not distance-adjusted) canal state that step 3(ค) counts as "drainage stressed". */
+export function canalStressed(o: Observation): boolean {
+  return (o.bank !== undefined && Math.round((o.bank - o.v) * 1000) / 1000 < CORROB.drainageFb)
+    || (o.bmaCrit !== undefined && o.v >= o.bmaCrit)
+    || !!o.flags?.includes('backflow');
+}
+
 function obsReason(o: Observation, km: number, level: Level, family: Family, kind: SignalKind, direct: boolean): Reason {
   const params: Record<string, number | string> = {};
   if ((o.kind === 'river' || o.kind === 'canal') && o.bank !== undefined) params.freeboardCm = Math.round((o.bank - o.v) * 100);
@@ -162,10 +169,7 @@ export function assessPoint(lat: number, lon: number, input: RiskInput): Assessm
     raisedBy.push('families');
   }
   const heavyRain = signals.some((s) => s.family === 'rain' && s.level >= 2);
-  const stressedCanal = nearest(of('canal'), lat, lon, CORROB.drainageCanalKm).some(({ item: o }) =>
-    (o.bank !== undefined && Math.round((o.bank - o.v) * 1000) / 1000 < CORROB.drainageFb)
-    || (o.bmaCrit !== undefined && o.v >= o.bmaCrit)
-    || !!o.flags?.includes('backflow'));
+  const stressedCanal = nearest(of('canal'), lat, lon, CORROB.drainageCanalKm).some(({ item: o }) => canalStressed(o));
   if (heavyRain && stressedCanal) {
     L = Math.max(L, 3);
     raisedBy.push('drainage');

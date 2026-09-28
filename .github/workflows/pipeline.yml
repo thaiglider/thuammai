@@ -53,7 +53,21 @@ jobs:
           path: .cache/state.json
           key: state-${{ github.run_id }}
           restore-keys: state-
-      - run: npm run pipeline -- --out dist --state .cache/state.json --site "$SITE_URL"
+      # Best effort: a missing Release, API hiccup or slow download must never stop a deploy
+      # (the pipeline then republishes the skill.json already on the site, or none).
+      - name: Latest skill.json from the newest archive Release
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '[.[].tagName | select(startswith("archive-"))] | sort | last // empty')
+          if [ -n "$tag" ]; then
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -p skill.json -D .cache/skill --clobber
+          else
+            echo "no archive release yet"
+          fi
+      - run: npm run pipeline -- --out dist --state .cache/state.json --site "$SITE_URL" --skill .cache/skill/skill.json
       - uses: actions/cache/save@v4
         if: always()
         with:
