@@ -1,9 +1,10 @@
 import { BODY_MAX, CAPS, RATE } from '../../../src/core/alert-config';
 import { alertKey, parseAlertKey } from '../../../src/core/alert-key';
+import { parseCoords } from '../../../src/core/coords';
 import { inThailand } from '../../../src/core/geo';
 import {
-  ALREADY_TH, CANCEL_BUTTON_TH, CB, dbDownText, defaultLabel, DISMISS_BUTTON_TH, FOLLOW_BUTTON_TH, followedText, fullSystemText,
-  helpText, labelSetText, listText, MAX_FOLLOWS_TH, NEW_FOLLOWS_CAP_TH, NO_FOLLOWS_TH, NOT_FOUND_TH,
+  ALREADY_TH, CANCEL_BUTTON_TH, CB, coordsReadText, dbDownText, defaultLabel, DISMISS_BUTTON_TH, FOLLOW_BUTTON_TH, followedText, fullSystemText,
+  helpText, labelSetText, listText, MAX_FOLLOWS_TH, NEW_FOLLOWS_CAP_TH, NO_FOLLOWS_TH, NOT_A_REPORT_TH, NOT_FOUND_TH,
   OTHER_TH, OUTSIDE_TH, pausedText, provinceTitle, SEND_LOCATION_TH, siteLink, skipText, stage1Text, START_TH, STOP_ALL_BUTTON_TH, STOP_CONFIRM_TH,
   STOPPED_TH, tgName, unfollowButtonText, unfollowedText,
 } from '../../../src/core/tg-text';
@@ -100,8 +101,15 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
     await db.query('UPDATE target SET synced_at = $1, tg_await = NULL WHERE chat_id = $2', [c.now, c.chat]);
     return onLocation(c, loc.latitude, loc.longitude);
   }
-  await db.query('UPDATE target SET synced_at = $1 WHERE chat_id = $2', [c.now, c.chat]);
   const text = typeof m.text === 'string' ? m.text.trim() : '';
+  // Typed coordinates or a map link (Telegram Desktop/Web cannot send a location): a new place,
+  // never a name — it ends any wait like a location does.
+  const typed = text.startsWith('/') ? null : parseCoords(text);
+  if (typed) {
+    await db.query('UPDATE target SET synced_at = $1, tg_await = NULL WHERE chat_id = $2', [c.now, c.chat]);
+    return onLocation(c, typed.lat, typed.lon, true);
+  }
+  await db.query('UPDATE target SET synced_at = $1 WHERE chat_id = $2', [c.now, c.chat]);
   const cmd = text.match(/^\/([a-z]+)(?:@\w+)?(?:\s|$)/i)?.[1]?.toLowerCase() ?? null;
   // The wait is measured from the awaited follow's own created_at: CAPS.tgAwaitMin minutes.
   const t = (await db.query<{ tg_await: string | null; since: Date | null }>('SELECT t.tg_await AS tg_await, f.created_at AS since FROM target t LEFT JOIN follow f ON f.target_id = t.id AND f.key = t.tg_await WHERE t.chat_id = $1', [c.chat])).rows[0];
@@ -162,8 +170,10 @@ async function addPending(c: TgCtx, key: string): Promise<'added' | 'full'> {
 
 /** Stage 1: province overview now; the point's own level from the alerts loop within minutes —
  *  unless the sender is stalled, then no question is queued and nothing is promised (R16). */
-async function onLocation(c: TgCtx, lat: number, lon: number): Promise<void> {
-  if (!inThailand(lat, lon)) { await c.api.send(c.chat, OUTSIDE_TH); return; }
+async function onLocation(c: TgCtx, lat: number, lon: number, typed = false): Promise<void> {
+  // A typed message may also be a cry for help: its reply shows what was read and keeps the
+  // emergency numbers (a location from the attach menu cannot carry words).
+  if (!inThailand(lat, lon)) { await c.api.send(c.chat, typed ? `${OUTSIDE_TH}\n${NOT_A_REPORT_TH}` : OUTSIDE_TH); return; }
   const key = alertKey(lat, lon);
   const pending = (await alertsStatus(c.env, c.now)) === 'stalled' ? 'stalled' : await addPending(c, key);
   const [klat, klon] = key.split(',').map(Number) as [number, number];
@@ -174,7 +184,8 @@ async function onLocation(c: TgCtx, lat: number, lon: number): Promise<void> {
     pending,
     link: siteLink(c.env.SITE_URL, key),
   });
-  await c.api.send(c.chat, text, { inline_keyboard: [[{ text: FOLLOW_BUTTON_TH, callback_data: `f:${key}` }, { text: DISMISS_BUTTON_TH, callback_data: 'no' }]] });
+  const reply = typed ? `${coordsReadText(lat, lon)}\n${text}\n${NOT_A_REPORT_TH}` : text;
+  await c.api.send(c.chat, reply, { inline_keyboard: [[{ text: FOLLOW_BUTTON_TH, callback_data: `f:${key}` }, { text: DISMISS_BUTTON_TH, callback_data: 'no' }]] });
 }
 
 /** True only for a parseable generatedAt between 0 and AREA_STALE_MIN minutes old. */

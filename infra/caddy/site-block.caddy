@@ -1,6 +1,7 @@
 # thuammai — flood alerts API (compose project in @THUAMMAI_HOME@; spec phase 3A §4.1)
 @API_HOST@ {
 	import security_headers
+	# @TLS@ — thuammai caddy add puts a tls { dns … } block here when CADDY_TLS_DNS is set in .env
 	# No access_log on purpose: the privacy text promises that IPs are not stored (R1).
 	request_body {
 		max_size 70KB

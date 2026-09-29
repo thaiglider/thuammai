@@ -18,7 +18,14 @@ export const CB = {
 export const NOT_A_REPORT_TH = 'บอทนี้ไม่รับแจ้งเหตุ — เหตุฉุกเฉินโทร 1784 / 1669 / 191';
 export const START_TH = `ส่งตำแหน่งมาเพื่อดูความเสี่ยงน้ำท่วมและรับแจ้งเตือนเมื่อถึงระดับ 'เตือนภัย' · ${NOT_A_REPORT_TH}\n${NO_OFFICIAL_ORDER}`;
 export const SEND_LOCATION_TH = 'ส่งตำแหน่ง';
-export const OTHER_TH = `ส่งตำแหน่งมาเพื่อดูความเสี่ยงน้ำท่วม หรือพิมพ์ /help · ${NOT_A_REPORT_TH}`;
+export const OTHER_TH = [
+  'ส่งตำแหน่งมาเพื่อดูความเสี่ยงน้ำท่วม:',
+  '• มือถือ: แตะ 📎 → ตำแหน่ง → ลากหมุดหรือค้นหาสถานที่ → ส่งตำแหน่งที่เลือก',
+  '• คอมพิวเตอร์ (ส่งตำแหน่งไม่ได้): พิมพ์พิกัด เช่น 13.681, 102.084 หรือวางลิงก์ Google Maps แบบเต็มที่มีพิกัด',
+  `/help วิธีใช้ · ${NOT_A_REPORT_TH}`,
+].join('\n');
+/** First line of the reply to typed coordinates: what was read, so a misread is visible. */
+export const coordsReadText = (lat: number, lon: number): string => `พิกัดที่อ่านได้: ${lat.toFixed(6)}, ${lon.toFixed(6)}`;
 export const OUTSIDE_TH = 'ตำแหน่งนี้อยู่นอกประเทศไทย';
 export const FOLLOW_BUTTON_TH = 'ติดตามจุดนี้';
 export const DISMISS_BUTTON_TH = 'ไม่ต้อง';
@@ -45,6 +52,7 @@ export function helpText(siteUrl: string): string {
     'ข้อมูลหาย = บอทเงียบ ไม่ได้แปลว่าปลอดภัย',
     'เก็บอะไร: chat id, พิกัดโดยประมาณ (~100 ม.) และชื่อจุดที่คุณตั้ง บนเซิร์ฟเวอร์ของโครงการ (ต่างประเทศ) — ลบทั้งหมดได้ด้วย /stop (สำเนาสำรองลบภายใน 14 วัน)',
     '/list จุดที่ติดตาม · /stop เลิกทั้งหมดและลบข้อมูล',
+    'จุดอื่นที่ไม่ใช่ที่อยู่ตอนนี้: 📎 → ตำแหน่ง → ลากหมุดหรือค้นหาสถานที่ · บนคอมพิวเตอร์พิมพ์พิกัด (ทศนิยม 3 ตำแหน่งขึ้นไป) หรือวางลิงก์ Google Maps แบบเต็ม (ลิงก์ย่อ maps.app.goo.gl ใช้ไม่ได้)',
     NOT_A_REPORT_TH,
     `ดูบนเว็บ: ${siteUrl}`,
     NO_OFFICIAL_ORDER,

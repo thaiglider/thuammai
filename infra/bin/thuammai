@@ -295,7 +295,7 @@ cmd_install() {
   fi
   say ""
   say "installed (release $tag). Next (owner guide docs/ops/vps-owner-setup.md) / ขั้นต่อไป:"
-  say "  1. DNS: A record 'flood' → this VPS, DNS only (grey cloud)"
+  say "  1. DNS: A record 'flood' → this VPS (Proxied if the host firewall admits only Cloudflare — then CLIENT_IP_MODE=cloudflare and CADDY_TLS_DNS in .env; owner guide step 2)"
   say "  2. thuammai caddy add      (shows the block and a diff, asks before touching the shared Caddyfile)"
   say "  3. thuammai finish"
   say "  GitHub variables: ALERTS_ORIGIN=https://$(env_get API_HOST)  VAPID_PUBLIC_KEY=$(env_get VAPID_PUBLIC_KEY)  TELEGRAM_BOT_USERNAME=$(env_get TELEGRAM_BOT_USERNAME)"
@@ -305,7 +305,7 @@ cmd_install() {
 # inside the shared caddy container, reload only when valid; any failure copies the backup back in
 # place (the file is bind-mounted into caddy — its inode must stay the same).
 cmd_caddy_add() {
-  local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host block dest bak ans new mounts
+  local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host tlsdns block dest bak ans new mounts
   host="$(env_get API_HOST)"
   [ -n "$host" ] || die "API_HOST is not set — run thuammai install first"
   valid_host "$host" || die "API_HOST in $TH/.env is not a plain host name (no *, port, comma, space, # or &) — nothing changed"
@@ -320,6 +320,15 @@ cmd_caddy_add() {
   dest="$(printf '%s\n' "$mounts" | awk -v f="$file" -v d="$(dirname "$file")" -v b="$(basename "$file")" '$1 == f { print $2; exit } $1 == d { print $2 "/" b; exit }')"
   [ -n "$dest" ] || die "the caddy container does not mount $file — it would never see the block; nothing changed"
   block="$(sed "s#@API_HOST@#$host#g; s#@THUAMMAI_HOME@#$TH#g" "$(release_dir "$(current_tag)")/caddy/site-block.caddy")"
+  # A shared Caddy that proves domains by DNS-01 per zone (its firewall lets only Cloudflare in, so
+  # HTTP-01/TLS-ALPN cannot work) needs the same `tls { dns … }` as its other sites in this zone.
+  tlsdns="$(env_get CADDY_TLS_DNS)"
+  if [ -n "$tlsdns" ]; then
+    [[ "$tlsdns" =~ ^[a-z0-9_]+\ \{env\.[A-Z0-9_]+\}$ ]] || die "CADDY_TLS_DNS must look like: cloudflare {env.CF_DNS_TOKEN_COM} — nothing changed"
+    block="$(printf '%s\n' "$block" | awk -v d="$tlsdns" '/^\t# @TLS@/ { print "\ttls {"; print "\t\tdns " d; print "\t}"; next } { print }')"
+  else
+    block="$(printf '%s\n' "$block" | grep -v '@TLS@')"
+  fi
   grep -q '^(security_headers)' "$file" || block="$(printf '%s\n' "$block" | grep -v 'import security_headers')"
   say "---- block for $file / บล็อกที่จะเพิ่ม ----"
   say "$block"
