@@ -47,11 +47,12 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: npm }
       - run: npm ci
-      # Public values only (never secrets): the Worker origin is baked in only while alerts are on.
+      # Public values only (never secrets): the Worker origin and the bot link are baked in only while alerts are on.
       - run: npm run build
         env:
           VITE_ALERTS_ORIGIN: ${{ vars.ALERTS_ENABLED == '1' && vars.ALERTS_ORIGIN || '' }}
           VITE_VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          VITE_TELEGRAM_BOT: ${{ vars.ALERTS_ENABLED == '1' && vars.TELEGRAM_BOT_USERNAME || '' }}
       - uses: actions/cache/restore@v4
         with:
           path: .cache/state.json
@@ -111,6 +112,8 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SITE_URL: ${{ env.SITE_URL }}
   next:
     needs: [gate, build]
     if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}

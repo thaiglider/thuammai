@@ -17,6 +17,17 @@ export function alertsCfg(): AlertsCfg {
 }
 /** A 65-byte P-256 public key is 87 base64url characters. */
 export const pushConfigured = (c: AlertsCfg): boolean => ALERTS_ORIGIN_RE.test(c.origin) && /^[A-Za-z0-9_-]{87}$/.test(c.vapid);
+/** A Telegram bot username (5–32 of A–Z a–z 0–9 _), without @. */
+export const tgBotOk = (c: AlertsCfg): boolean => /^[A-Za-z0-9_]{5,32}$/.test(c.tgBot);
+/** The bot link is offered only while alerts are on in this build (final review I1): a valid bot
+ *  name AND a valid alerts config. The build passes VITE_TELEGRAM_BOT only when ALERTS_ENABLED=1;
+ *  this is the client-side half, so a bad origin (D15) never sends people to a silent bot either. */
+export const telegramOffered = (c: AlertsCfg): boolean => pushConfigured(c) && tgBotOk(c);
+export const telegramLink = (c: AlertsCfg): string => `https://t.me/${c.tgBot}`;
+export const TELEGRAM_LINK_TH = 'รับแจ้งเตือนทาง Telegram แทน';
+/** "Full" is shared by both channels (the Worker's caps), so Telegram cannot follow either — but
+ *  it can still show a point's level (final review M1). */
+export const FULL_WITH_TG_TH = 'ระบบแจ้งเตือนรับผู้ใช้เต็มชั่วคราว — ดูระดับทาง Telegram หรือเปิดเว็บดูเป็นระยะ';
 
 /** `holdUntil`: no sync before this time (the Worker's per-day new-places cap, m4). */
 export interface AlertsKv { on: true; endpoint: string; syncedAt: string; placesHash: string; pending?: boolean; holdUntil?: string }
@@ -34,7 +45,7 @@ export function placesHash(places: readonly Pick<Place, 'lat' | 'lon'>[]): strin
   return [...new Set(places.map((p) => alertKey(p.lat, p.lon)))].sort().join('|');
 }
 
-export type AlertsMode = 'push' | 'ios-guide' | null;
+export type AlertsMode = 'push' | 'ios-guide' | 'telegram' | null;
 
 /** I3: this phone says alerts are on, but this build cannot deliver them (alerts switched off or
  *  misconfigured on the server side) or the browser has no service worker. Never show "on" then. */
@@ -49,9 +60,13 @@ export function browserPushGlobals(): PushGlobals {
 
 /** Which alerts UI this browser gets (spec §6.1); null hides the whole section. */
 export function alertsMode(cfg: AlertsCfg, env: Env, kv: KV, g: PushGlobals, placeCount: number): AlertsMode {
-  if (placeCount < 1 || env.isLine || !pushConfigured(cfg) || !kv.persistent || !env.canServiceWorker) return null;
-  if (env.isIOS && !env.standalone) return 'ios-guide';
-  return g.hasPushManager && g.hasNotification ? 'push' : null;
+  if (placeCount < 1 || env.isLine) return null;
+  if (pushConfigured(cfg) && kv.persistent && env.canServiceWorker) {
+    if (env.isIOS && !env.standalone) return 'ios-guide';
+    if (g.hasPushManager && g.hasNotification) return 'push';
+  }
+  // A link needs no storage, Service Worker or Push API (ruling 13).
+  return telegramOffered(cfg) ? 'telegram' : null;
 }
 
 export const GPS_CONFIRM_TH = 'ใช้ตำแหน่งปัจจุบันเพื่อหาความเสี่ยงของจุดนี้เท่านั้น ตำแหน่งไม่ถูกส่งออกจากเครื่อง — ดำเนินการต่อ?';

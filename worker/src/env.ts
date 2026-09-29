@@ -25,5 +25,8 @@ export interface Env {
   TELEGRAM_WEBHOOK_SECRET?: string;
 }
 
+/** caches.default in Workers (tests pass an in-memory one). */
+export interface CacheLike { match(req: Request): Promise<Response | undefined>; put(req: Request, res: Response): Promise<void> }
+
 /** Things handlers get injected (tests pass fakes). */
-export interface Deps { now(): Date; fetch: typeof fetch }
+export interface Deps { now(): Date; fetch: typeof fetch; cache?: CacheLike | null }

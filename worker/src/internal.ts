@@ -1,5 +1,5 @@
 import { BODY_MAX, CAPS } from '../../src/core/alert-config';
-import { ALERT_KEY_RE } from '../../src/core/alert-key';
+import { ALERT_KEY_RE, parseAlertKey } from '../../src/core/alert-key';
 import { toIso07 } from '../../src/core/time';
 import type { D1Database, Deps, Env } from './env';
 import { err, json, readJson, safeEqual } from './http';
@@ -23,7 +23,7 @@ export async function internalRoute(req: Request, env: Env, deps: Deps, url: URL
   if (path === 'state' && req.method === 'PUT') return putState(db, await readJson(req, BODY_MAX.internal), deps.now());
   if (path === 'targets' && req.method === 'POST') return targets(db, await readJson(req, BODY_MAX.internal));
   if (path === 'report' && req.method === 'POST') return report(db, await readJson(req, BODY_MAX.internal));
-  // (Plan E adds tg-pending here)
+  if (path === 'tg-pending' && req.method === 'GET') return tgPending(db, deps.now());
   return err(404, 'not_found');
 }
 
@@ -77,4 +77,14 @@ async function report(db: D1Database, body: unknown): Promise<Response> {
   if (donePending.length) stmts.push(db.prepare('DELETE FROM tg_pending WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(donePending)));
   if (stmts.length) await db.batch(stmts);
   return json(200, { ok: true });
+}
+
+async function tgPending(db: D1Database, now: Date): Promise<Response> {
+  const cut = toIso07(new Date(now.getTime() - CAPS.tgPendingTtlMin * 60e3));
+  const r = await db.prepare('SELECT id, chat_id AS chat, key AS k, created_at AS createdAt FROM tg_pending WHERE created_at >= ? ORDER BY id LIMIT ?').bind(cut, CAPS.batch).all<{ id: number; chat: number; k: string; createdAt: string }>();
+  const pending = r.results.flatMap((x) => {
+    const p = parseAlertKey(x.k);
+    return p ? [{ id: x.id, chat: x.chat, k: x.k, lat: p.lat, lon: p.lon, createdAt: x.createdAt }] : [];
+  });
+  return json(200, { pending });
 }

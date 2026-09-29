@@ -17,10 +17,14 @@ export const CAPS = {
   newPlacesPerTargetPerDay: 30, // per-target churn cap (spec §8 review): caps repeated resubscribe-with-new-places abuse
   pushPerRun: 5_000, tgPerRun: 1_500,
   tgLabelMax: 20, tgPendingPerChat: 3, tgPendingTtlMin: 30,
+  tgAwaitMin: 15, // the "name this place" wait after a follow expires (final review I2)
   batch: 200,
 } as const;
 // subscribePerIpPerDay: 200 — Thai mobile networks share IPv4 via CGNAT; worst case ~13k D1 rows/day per IP.
-export const RATE = { subscribePerIpPerMin: 10, subscribePerIpPerDay: 200, subscribePerTargetPerHour: 20, tgUpdatesPerChatPerMin: 20 } as const;
+// tgUpdatesPerChatPerDay: a follow/unfollow loop at the 20/min burst cap could otherwise write
+// ~28,800 counter rows/day from one chat; 300 caps that while leaving normal use (a handful of
+// updates) untouched.
+export const RATE = { subscribePerIpPerMin: 10, subscribePerIpPerDay: 200, subscribePerTargetPerHour: 20, tgUpdatesPerChatPerMin: 20, tgUpdatesPerChatPerDay: 300 } as const;
 export const BODY_MAX = { public: 4_096, telegram: 65_536, internal: 1_048_576 } as const;
 export const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'web.push.apple.com'] as const;
 export const PUSH_HOST_SUFFIX = '.notify.windows.com'; // WNS (Edge on Windows)

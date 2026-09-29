@@ -1,4 +1,5 @@
 import { inThailand } from '../../core/geo';
+import { cleanText } from '../../core/text';
 
 export interface Place { name: string; lat: number; lon: number }
 export const MAX_NAME = 40;
@@ -9,18 +10,8 @@ export const FULL_TH = `มีครบ ${MAX_PLACES} จุดแล้ว — 
 
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
 
-// A high surrogate not followed by a low surrogate, or a low surrogate not preceded by a high
-// surrogate: half of a broken pair. Left in a name, it would make encodeURIComponent throw.
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-
 export function cleanName(s: string): string {
-  // eslint-disable-next-line no-control-regex -- intentional: strip control chars from hostile share-link input
-  const stripped = s.replace(/[<>\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim();
-  const safe = stripped.replace(LONE_SURROGATE, '');
-  // Truncate by code point, not UTF-16 unit, so a MAX_NAME-th astral character (e.g. an emoji)
-  // is never split in half.
-  const t = [...safe].slice(0, MAX_NAME).join('');
-  return t || 'จุดที่บันทึก';
+  return cleanText(s, MAX_NAME) || 'จุดที่บันทึก';
 }
 
 export const placeKey = (p: Place) => `${r4(p.lat).toFixed(4)},${r4(p.lon).toFixed(4)}`;

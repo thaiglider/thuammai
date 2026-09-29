@@ -8,6 +8,7 @@ export interface FollowRow {
 }
 export interface FollowUpdate { fid: number; alerted: 0 | 3 | 4; lastAlertAt: string | null; lastL4At: string | null; lastClearAt: string | null }
 export interface Report { follows: FollowUpdate[]; deadTargets: number[]; donePending: number[] }
+export interface PendingRow { id: number; chat: number; k: string; lat: number; lon: number; createdAt: string }
 
 /** A failed Worker call. The message is fixed: fetch errors and response bodies can contain URLs
  *  and are never kept (public logs). status 0 = network error or timeout. */
@@ -86,6 +87,9 @@ export function workerClient(origin: string, token: string, fetchImpl: typeof fe
     },
     async report(r: Report): Promise<void> {
       await call('POST', '/internal/v1/report', r);
+    },
+    async tgPending(): Promise<PendingRow[]> {
+      return (await call<{ pending: PendingRow[] }>('GET', '/internal/v1/tg-pending'))!.pending;
     },
   };
 }

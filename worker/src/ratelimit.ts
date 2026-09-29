@@ -50,6 +50,25 @@ export async function counterRate(env: Env, prefix: string, material: string, li
   return r !== null;
 }
 
+/** A per-chat (or otherwise doubly-windowed) limit with a minute burst cap AND a day cap, in one D1
+ *  round trip — the same no-write-once-over-limit pattern `checkIpRate` uses for push subscribes:
+ *  the minute statement's source subquery is itself gated on the day bucket already being under
+ *  `dayLimit`, so once a chat is at its day cap the minute statement writes nothing either (no new
+ *  minute-bucket row, ever, for the rest of that day) — not merely "one more row that gets ignored
+ *  later". An empty RETURNING on either statement is the only "blocked" signal (see `counterRate`'s
+ *  own docstring for why `?? 0` would be wrong here). */
+export async function counterRateDaily(env: Env, prefix: string, material: string, minuteLimit: number, dayLimit: number, now: Date): Promise<boolean> {
+  if (!env.INTERNAL_TOKEN) throw new HttpError(503, 'unavailable');
+  const name = await rateName(env.INTERNAL_TOKEN, prefix, material);
+  const minuteBucket = windowKey(now, 'minute');
+  const dayBucket = windowKey(now, 'day');
+  const results = await env.DB.batch([
+    env.DB.prepare('INSERT INTO counter (name, day, n) SELECT ?, ?, 1 WHERE COALESCE((SELECT n FROM counter WHERE name = ? AND day = ?), 0) < ? ON CONFLICT (name, day) DO UPDATE SET n = n + 1 WHERE n < ? RETURNING n').bind(name, minuteBucket, name, dayBucket, dayLimit, minuteLimit),
+    env.DB.prepare('INSERT INTO counter (name, day, n) VALUES (?, ?, 1) ON CONFLICT (name, day) DO UPDATE SET n = n + 1 WHERE n < ? RETURNING n').bind(name, dayBucket, dayLimit),
+  ]);
+  return results[0]!.results.length > 0 && results[1]!.results.length > 0;
+}
+
 /** IPv4 unchanged; an IPv4-mapped (`::ffff:1.2.3.4`) or IPv4-compatible (`::1.2.3.4`) IPv6 address
  *  keys on the embedded IPv4 address itself (a "/64" of it makes no sense — it's one translated
  *  IPv4 host, not an IPv6 network); any other IPv6 address is collapsed to its /64 (the size an

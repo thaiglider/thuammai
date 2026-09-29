@@ -1,6 +1,6 @@
 import { fmtTime } from '../../core/time';
 import { browserPushDeps, disableAlerts, enableAlerts, scheduleSync, serviceWorkerGone, syncNow, type EnableResult, type SyncResult } from '../lib/alerts-client';
-import { ALERTS_PAUSED_TH, ALERTS_PRIVACY_TH, alertsCfg, alertsOn, loadAlerts, pushConfigured } from '../lib/alerts-state';
+import { ALERTS_PAUSED_TH, ALERTS_PRIVACY_TH, alertsCfg, alertsOn, FULL_WITH_TG_TH, loadAlerts, pushConfigured, telegramLink, TELEGRAM_LINK_TH, telegramOffered } from '../lib/alerts-state';
 import { clear, h } from '../lib/dom';
 import { trapFocus } from '../lib/focus';
 import type { Place } from '../lib/places';
@@ -16,7 +16,7 @@ export const ENABLE_TEXT: Record<Exclude<EnableResult, 'ok'>, string> = {
   unavailable: 'ตอนนี้เปิดการแจ้งเตือนไม่ได้ (ระบบแจ้งเตือนขัดข้อง) — ลองใหม่ภายหลัง เว็บยังใช้ได้ตามปกติ',
   rate: 'ลองใหม่ในอีก 1 นาที',
   limited: 'เพิ่มจุดใหม่ได้วันละไม่เกิน 30 จุด — ลองใหม่พรุ่งนี้',
-  // Plan E adds "ใช้ Telegram หรือ" once the bot exists (spec §6.1).
+  // With the bot on, FULL_WITH_TG_TH replaces this (spec §6.1).
   full: 'ระบบแจ้งเตือนรับผู้ใช้เต็มชั่วคราว — เปิดเว็บดูเป็นระยะ',
 };
 export const SYNC_TEXT: Partial<Record<SyncResult, string>> = {
@@ -50,7 +50,7 @@ function openConfirm(onYes: () => void): void {
   yes.focus();
 }
 
-export type SectionMode = 'push' | 'ios-guide' | 'paused';
+export type SectionMode = 'push' | 'ios-guide' | 'paused' | 'telegram';
 
 /** I3: alerts on in this phone's settings, but nothing can arrive. Says so, and offers to clear
  *  the local setting (which also deletes on the server when that is still possible). */
@@ -68,6 +68,10 @@ export function mountAlerts(host: HTMLElement, o: AlertsViewCtx, mode: SectionMo
   clear(host);
   host.dataset.mode = mode;
   host.append(h('h2', {}, 'การแจ้งเตือน'));
+  if (mode === 'telegram') {
+    host.append(h('p', {}, h('a', { href: telegramLink(alertsCfg()), rel: 'noopener' }, TELEGRAM_LINK_TH)));
+    return;
+  }
   if (mode === 'paused') {
     paused(host, o, 'alerts-paused', () => {
       clear(host);
@@ -95,7 +99,7 @@ export function mountAlerts(host: HTMLElement, o: AlertsViewCtx, mode: SectionMo
       void enableAlerts(browserPushDeps(o.kv, o.base), o.getPlaces()).then((r) => {
         btn.disabled = false;
         if (r === 'ok') mountAlerts(host, o, mode);
-        else msg.textContent = ENABLE_TEXT[r];
+        else msg.textContent = r === 'full' && telegramOffered(alertsCfg()) ? FULL_WITH_TG_TH : ENABLE_TEXT[r];
       });
     });
   } }, ALERTS_BUTTON_TH);
@@ -151,6 +155,7 @@ export function onOpen(o: AlertsViewCtx): void {
 /** เมนู → การแจ้งเตือน (spec §6.5). */
 export function renderAlertsMenu(host: HTMLElement, o: AlertsViewCtx): void {
   clear(host);
+  const cfg = alertsCfg();
   const st = loadAlerts(o.kv);
   host.append(h('h2', {}, 'การแจ้งเตือน'));
   const privacy = h('p', { class: 'muted' }, ALERTS_PRIVACY_TH);
@@ -160,15 +165,18 @@ export function renderAlertsMenu(host: HTMLElement, o: AlertsViewCtx): void {
     paused(host, o, 'alerts-menu-status', () => renderAlertsMenu(host, o));
     host.append(privacy);
   };
-  if (st && !pushConfigured(alertsCfg())) { showPaused(); return; }
-  if (!st && !pushConfigured(alertsCfg())) { host.remove(); return; }
-  host.append(h('p', { 'data-testid': 'alerts-menu-status' }, st ? `เปิดอยู่ · ติดตาม ${o.getPlaces().length} จุด · ซิงก์ล่าสุด ${fmtTime(st.syncedAt)}` : 'ปิดอยู่'));
-  if (st) {
-    void serviceWorkerGone(browserPushDeps(o.kv, o.base)).then((gone) => { if (gone && host.isConnected && loadAlerts(o.kv)) showPaused(); });
-    host.append(h('button', { 'data-testid': 'alerts-disable', onclick: (e: Event) => {
-      (e.currentTarget as HTMLButtonElement).disabled = true;
-      void disableAlerts(browserPushDeps(o.kv, o.base)).then(() => renderAlertsMenu(host, o));
-    } }, 'เลิกรับแจ้งเตือน'));
+  if (st && !pushConfigured(cfg)) { showPaused(); return; }
+  if (!st && !pushConfigured(cfg)) { host.remove(); return; } // the bot link needs a working alerts config too
+  if (pushConfigured(cfg)) {
+    host.append(h('p', { 'data-testid': 'alerts-menu-status' }, st ? `เปิดอยู่ · ติดตาม ${o.getPlaces().length} จุด · ซิงก์ล่าสุด ${fmtTime(st.syncedAt)}` : 'ปิดอยู่'));
+    if (st) {
+      void serviceWorkerGone(browserPushDeps(o.kv, o.base)).then((gone) => { if (gone && host.isConnected && loadAlerts(o.kv)) showPaused(); });
+      host.append(h('button', { 'data-testid': 'alerts-disable', onclick: (e: Event) => {
+        (e.currentTarget as HTMLButtonElement).disabled = true;
+        void disableAlerts(browserPushDeps(o.kv, o.base)).then(() => renderAlertsMenu(host, o));
+      } }, 'เลิกรับแจ้งเตือน'));
+    }
   }
+  if (telegramOffered(cfg)) host.append(h('p', {}, h('a', { href: telegramLink(cfg), rel: 'noopener' }, 'แจ้งเตือนทาง Telegram')));
   host.append(privacy);
 }

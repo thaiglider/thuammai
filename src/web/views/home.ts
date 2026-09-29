@@ -354,7 +354,8 @@ function renderAddPanel(ctx: AppCtx, add: (p: Place) => 'added' | 'dup' | 'full'
       { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 });
   } }, 'ใช้ตำแหน่งปัจจุบัน') : null;
   // The old "only while this page is open" button stays only where Web Push is impossible (spec §6.1).
-  const pushCapable = alertsMode(alertsCfg(), ctx.env, ctx.kv, browserPushGlobals(), 1) !== null;
+  const pushMode = alertsMode(alertsCfg(), ctx.env, ctx.kv, browserPushGlobals(), 1);
+  const pushCapable = pushMode === 'push' || pushMode === 'ios-guide';
   const notify = !pushCapable && ctx.env.canNotify && typeof Notification !== 'undefined' && Notification.permission === 'default'
     ? h('button', { onclick: async () => { await Notification.requestPermission(); } }, 'เตือนด้วยการแจ้งเตือนของเครื่อง (เฉพาะตอนเปิดหน้านี้ไว้)')
     : null;
