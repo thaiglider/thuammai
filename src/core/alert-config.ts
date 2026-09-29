@@ -31,3 +31,22 @@ export const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.
 export const PUSH_HOST_SUFFIX = '.notify.windows.com'; // WNS (Edge on Windows)
 /** The Worker origin baked into the web build: https, a dotted host, optional port, no path. */
 export const ALERTS_ORIGIN_RE = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?$/;
+
+/** LINE (phase-3C spec §6, R-L4). The first ten values are the spec's; the last four are Plan G's (G-10, spec §5.1). */
+export const LINE = {
+  maxApproved: 20,
+  placesPerUser: 2,
+  perUserMonth: 10,       // push messages per person per month (level 4 is not held by this)
+  monthlyLimit: 300,      // F1: the free plan in Thailand; GET quota may lower it, never raise it
+  reserve: 40,            // kept for level 4 and welcome messages
+  pendingMaxAgeS: 45,     // alerts answers line_pending rows at most this old (reply token: 1 min, F4)
+  pendingDropS: 60,       // alerts drops a row only past this age — the LINE reply token lives 1 minute
+  apiFallbackS: 40,       // the api answers an unclaimed row itself after this long
+  requestsPending: 50,    // "ปิดรับคำขอชั่วคราว" at this many pending requests
+  rejectCooldownDays: 30,
+  linkCodeTtlMin: 10,
+  pendingPerUser: 3,
+  eventsPerRequest: 5,
+  replyTimeoutMs: 1500,
+  answersPerTick: 100,
+} as const;

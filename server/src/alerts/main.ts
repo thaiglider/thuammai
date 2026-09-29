@@ -13,6 +13,8 @@ export const RELEASE_WAIT_MS = 1_000;
  *  gone ≤ 50 s after SIGTERM — inside compose's 60-s stop_grace_period (ruling T7-2). */
 export const STOP_HARD_MS = 47_000;
 export const LOCK_RETRY_MS = 60_000;
+/** A NOTIFY brings the next tick forward to this long after the previous tick ended (phase-3C spec §5.2). */
+export const WAKE_GAP_MS = 2_000;
 
 export interface Timers {
   setTimeout(fn: () => void, ms: number): unknown; clearTimeout(h: unknown): void;
@@ -45,7 +47,7 @@ export interface ProcessDeps {
  *  the health flags) that keeps beating during long runs; ticks every 60 s, never overlapping; a
  *  tick running >10 min or a lost lock connection → exit 1 (Docker restarts us; at-least-once
  *  holds); SIGTERM → no new batch, wait ≤45 s for the current one, release, exit 0. */
-export function startAlerts(p: ProcessDeps): { state: LoopState; started: Promise<void>; stop(): Promise<void> } {
+export function startAlerts(p: ProcessDeps): { state: LoopState; started: Promise<void>; stop(): Promise<void>; wake(): void } {
   const s = p.state ?? newLoopState();
   const T = p.timers ?? REAL;
   const runTick = p.tickFn ?? (() => tick(p.loop, s));
@@ -56,6 +58,8 @@ export function startAlerts(p: ProcessDeps): { state: LoopState; started: Promis
   let tickTimer: unknown = null;
   let hbTimer: unknown = null;
   let stopPromise: Promise<void> | null = null;
+  let lastTickEnd = 0;
+  let wakeSoon = false;
   p.loop.alert.stopping = () => stopping;
   // No premature "up": until the first tick has computed the health flags, Kuma hears nothing
   // (unless paused, which is known at start).
@@ -103,7 +107,10 @@ export function startAlerts(p: ProcessDeps): { state: LoopState; started: Promis
     await current;
     current = null;
     tickStarted = null;
-    if (!stopping) tickTimer = T.setTimeout(() => { void loopOnce(); }, TICK_MS);
+    lastTickEnd = p.clock();
+    const wait = wakeSoon ? WAKE_GAP_MS : TICK_MS;
+    wakeSoon = false;
+    if (!stopping) tickTimer = T.setTimeout(() => { void loopOnce(); }, wait);
   };
 
   const started = (async () => {
@@ -127,6 +134,14 @@ export function startAlerts(p: ProcessDeps): { state: LoopState; started: Promis
     stop() {
       stopPromise ??= stopOnce();
       return stopPromise;
+    },
+    /** NOTIFY thuammai_wake: never two ticks at once — during a tick only the following wait shrinks. */
+    wake() {
+      if (stopping || !locked) return;
+      if (current) { wakeSoon = true; return; }
+      if (tickTimer === null) return;
+      T.clearTimeout(tickTimer);
+      tickTimer = T.setTimeout(() => { void loopOnce(); }, Math.max(0, lastTickEnd + WAKE_GAP_MS - p.clock()));
     },
   };
 

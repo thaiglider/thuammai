@@ -2,16 +2,18 @@ import { BODY_MAX, CAPS, RATE } from '../../../src/core/alert-config';
 import { alertKey, parseAlertKey } from '../../../src/core/alert-key';
 import { parseCoords } from '../../../src/core/coords';
 import { inThailand } from '../../../src/core/geo';
+import { ACB } from '../../../src/core/line-text';
 import {
   ALREADY_TH, CANCEL_BUTTON_TH, CB, coordsReadText, dbDownText, defaultLabel, DISMISS_BUTTON_TH, FOLLOW_BUTTON_TH, followedText, fullSystemText,
   helpText, labelSetText, listText, MAX_FOLLOWS_TH, NEW_FOLLOWS_CAP_TH, NO_FOLLOWS_TH, NOT_A_REPORT_TH, NOT_FOUND_TH,
   OTHER_TH, OUTSIDE_TH, pausedText, provinceTitle, SEND_LOCATION_TH, siteLink, skipText, stage1Text, START_TH, STOP_ALL_BUTTON_TH, STOP_CONFIRM_TH,
-  STOPPED_TH, tgName, unfollowButtonText, unfollowedText,
+  STOPPED_TH, tgName, unfollowButtonText, unfollowedText, type Stage1,
 } from '../../../src/core/tg-text';
 import { provinceArea, provinceFor } from './areas';
 import { addCounts, boundedCount, capsAllow } from './caps';
 import type { Deps, Env } from './env';
 import { err, json, readJson, safeEqual, utcDay } from './http';
+import { onAdminCallback, onAdminCommand } from './line-admin';
 import { counterRate, counterRateDaily, rateName } from './ratelimit';
 import { alertsStatus } from './status';
 import { tgApi, type ReplyMarkup, type TgApi } from './tg-api';
@@ -53,15 +55,16 @@ function asCallback(x: unknown): TgCallback | null {
 }
 const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 const STOP_CMD_RE = /^\/stop(?:@\w+)?(?:\s|$)/i;
-const PAUSE_OK_CMD_RE = /^\/(?:stop|list|help)(?:@\w+)?(?:\s|$)/i;
+const PAUSE_OK_CMD_RE = /^\/(?:stop|list|help|admin|line|line_users)(?:@\w+)?(?:\s|$)/i;
 /** `/stop` and its "ลบทั้งหมด" button skip the per-chat DAY cap (final review M4). */
 const isDeletion = (msg: TgMsg | null, cb: TgCallback | null): boolean =>
   (msg !== null && typeof msg.text === 'string' && STOP_CMD_RE.test(msg.text.trim())) ||
   (cb !== null && typeof cb.data === 'string' && CB.stopAll.test(cb.data));
-/** While paused (F1-8): deleting, listing, help, unfollow and cancel still work. */
+const isAdminCallback = (data: string): boolean => ACB.approve.test(data) || ACB.reject.test(data) || ACB.revoke.test(data);
+/** While paused (F1-8, G-6): deleting, listing, help, unfollow, cancel and the admin still work. */
 const allowedWhilePaused = (msg: TgMsg | null, cb: TgCallback | null): boolean =>
   (msg !== null && typeof msg.text === 'string' && PAUSE_OK_CMD_RE.test(msg.text.trim())) ||
-  (cb !== null && typeof cb.data === 'string' && (CB.stopAll.test(cb.data) || CB.unfollow.test(cb.data) || CB.dismiss.test(cb.data)));
+  (cb !== null && typeof cb.data === 'string' && (CB.stopAll.test(cb.data) || CB.unfollow.test(cb.data) || CB.dismiss.test(cb.data) || isAdminCallback(cb.data)));
 
 export async function handleUpdate(update: unknown, env: Env, deps: Deps): Promise<void> {
   if (!isObj(update)) return;
@@ -110,7 +113,7 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
     return onLocation(c, typed.lat, typed.lon, true);
   }
   await db.query('UPDATE target SET synced_at = $1 WHERE chat_id = $2', [c.now, c.chat]);
-  const cmd = text.match(/^\/([a-z]+)(?:@\w+)?(?:\s|$)/i)?.[1]?.toLowerCase() ?? null;
+  const cmd = text.match(/^\/([a-z_]+)(?:@\w+)?(?:\s|$)/i)?.[1]?.toLowerCase() ?? null;
   // The wait is measured from the awaited follow's own created_at: CAPS.tgAwaitMin minutes.
   const t = (await db.query<{ tg_await: string | null; since: Date | null }>('SELECT t.tg_await AS tg_await, f.created_at AS since FROM target t LEFT JOIN follow f ON f.target_id = t.id AND f.key = t.tg_await WHERE t.chat_id = $1', [c.chat])).rows[0];
   const stored = t?.tg_await ?? null;
@@ -123,6 +126,12 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
     if (cmd === 'list') return onList(c);
     if (cmd === 'stop') {
       await c.api.send(c.chat, STOP_CONFIRM_TH, { inline_keyboard: [[{ text: STOP_ALL_BUTTON_TH, callback_data: 'x:all' }, { text: CANCEL_BUTTON_TH, callback_data: 'no' }]] });
+      return;
+    }
+    if (cmd === 'admin' || cmd === 'line' || cmd === 'line_users') {
+      if (await onAdminCommand(c, cmd, text)) return;
+      // Not the linked admin (spec §4.2): looks exactly like any other unknown command, paused or not.
+      await c.api.send(c.chat, c.env.ALERTS_PAUSED ? pausedText(c.env.SITE_URL) : OTHER_TH);
       return;
     }
     if (cmd === 'skip' && awaiting) return onSkip(c, awaiting);
@@ -176,14 +185,7 @@ async function onLocation(c: TgCtx, lat: number, lon: number, typed = false): Pr
   if (!inThailand(lat, lon)) { await c.api.send(c.chat, typed ? `${OUTSIDE_TH}\n${NOT_A_REPORT_TH}` : OUTSIDE_TH); return; }
   const key = alertKey(lat, lon);
   const pending = (await alertsStatus(c.env, c.now)) === 'stalled' ? 'stalled' : await addPending(c, key);
-  const [klat, klon] = key.split(',').map(Number) as [number, number];
-  const prov = provinceFor(klat, klon);
-  const area = await provinceArea(c.env.SITE_URL, prov.code, c.deps.fetch);
-  const text = stage1Text({
-    area: area ? { name: provinceTitle(prov.code, prov.th), level: area.level, at: area.generatedAt, stale: !isFreshEnough(c.now, area.generatedAt) } : null,
-    pending,
-    link: siteLink(c.env.SITE_URL, key),
-  });
+  const text = await stage1For(c.env, c.deps, c.now, key, pending);
   const reply = typed ? `${coordsReadText(lat, lon)}\n${text}\n${NOT_A_REPORT_TH}` : text;
   await c.api.send(c.chat, reply, { inline_keyboard: [[{ text: FOLLOW_BUTTON_TH, callback_data: `f:${key}` }, { text: DISMISS_BUTTON_TH, callback_data: 'no' }]] });
 }
@@ -192,6 +194,20 @@ async function onLocation(c: TgCtx, lat: number, lon: number, typed = false): Pr
 function isFreshEnough(now: Date, generatedAt: string): boolean {
   const age = (now.getTime() - Date.parse(generatedAt)) / 60e3;
   return age >= 0 && age <= AREA_STALE_MIN;
+}
+
+/** Stage 1's text (Telegram and LINE, Task 6 ruling): the province overview and a line that
+ *  promises nothing more than `pending` allows. `timeoutMs` lets LINE keep its own shorter budget
+ *  (spec §5.1's 1.5 s per LINE call) while Telegram leaves `provinceArea`'s own default. */
+export async function stage1For(env: Env, deps: Deps, now: Date, key: string, pending: Stage1['pending'], timeoutMs?: number): Promise<string> {
+  const [klat, klon] = key.split(',').map(Number) as [number, number];
+  const prov = provinceFor(klat, klon);
+  const area = await provinceArea(env.SITE_URL, prov.code, deps.fetch, timeoutMs);
+  return stage1Text({
+    area: area ? { name: provinceTitle(prov.code, prov.th), level: area.level, at: area.generatedAt, stale: !isFreshEnough(now, area.generatedAt) } : null,
+    pending,
+    link: siteLink(env.SITE_URL, key),
+  });
 }
 
 /** Inline buttons: strict formats, always answered. */
@@ -208,6 +224,7 @@ async function onCallback(c: TgCtx, cb: TgCallback): Promise<void> {
   if (u) return onUnfollow(c, Number(u[1]));
   if (CB.stopAll.test(data)) return onStopAll(c);
   if (CB.dismiss.test(data)) { await c.api.clearButtons(c.chat, cb.message.message_id); return; }
+  if (isAdminCallback(data)) { await onAdminCallback(c, data, cb.message.message_id); return; }
 }
 
 async function onFollow(c: TgCtx, key: string): Promise<void> {

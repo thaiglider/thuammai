@@ -13,6 +13,8 @@ await build({
     'tools/telegram': 'server/src/tools/telegram.ts',
     'tools/health': 'server/src/tools/health.ts',
     'tools/kuma': 'server/src/tools/kuma.ts',
+    'tools/admin': 'server/src/tools/admin.ts',
+    'tools/line': 'server/src/tools/line.ts',
   },
   outdir: 'server/dist',
   outExtension: { '.js': '.mjs' },

@@ -1,4 +1,4 @@
-import { RepoError, type AlertRepo, type FollowRow, type PendingRow, type PlaceRow, type Report } from '../../../src/alerts/repo';
+import { RepoError, type AlertRepo, type FollowRow, type FollowUpdate, type PendingRow, type PlaceRow, type Report } from '../../../src/alerts/repo';
 import { CAPS } from '../../../src/core/alert-config';
 import { parseAlertKey } from '../../../src/core/alert-key';
 import type { PointState } from '../../../src/core/alert-rule';
@@ -31,8 +31,8 @@ function toPoint(r: StateRow): PointState {
   return p;
 }
 interface FollowDbRow {
-  fid: number; targetId: number; key: string; ch: 'push' | 'tg'; label: string | null; endpoint: string | null; p256dh: string | null; auth: string | null;
-  chat: number | null; alerted: number; lastAlertAt: Date | null; lastL4At: Date | null; lastClearAt: Date | null;
+  fid: number; targetId: number; key: string; ch: 'push' | 'tg' | 'line'; label: string | null; endpoint: string | null; p256dh: string | null; auth: string | null;
+  chat: number | null; lineUser: string | null; alerted: number; lastAlertAt: Date | null; lastL4At: Date | null; lastClearAt: Date | null;
 }
 
 async function guard<T>(fn: () => Promise<T>): Promise<T> {
@@ -41,6 +41,16 @@ async function guard<T>(fn: () => Promise<T>): Promise<T> {
   } catch {
     throw new RepoError();
   }
+}
+
+/** The follow half of `report` (spec §6.2): the one home of this UPDATE, so LINE's `report`
+ *  (server/src/alerts/line-repo-pg.ts) calls this instead of repeating it (controller ruling). */
+export async function writeFollows(t: Db, follows: FollowUpdate[]): Promise<void> {
+  if (!follows.length) return;
+  await t.query(
+    'UPDATE follow AS f SET alerted = u.alerted, last_alert_at = u.a, last_l4_at = u.l4, last_clear_at = u.c FROM unnest($1::bigint[], $2::smallint[], $3::timestamptz[], $4::timestamptz[], $5::timestamptz[]) AS u(fid, alerted, a, l4, c) WHERE f.id = u.fid',
+    [follows.map((f) => f.fid), follows.map((f) => f.alerted), follows.map((f) => f.lastAlertAt), follows.map((f) => f.lastL4At), follows.map((f) => f.lastClearAt)],
+  );
 }
 
 export function pgRepo(db: Db): AlertRepo {
@@ -80,7 +90,7 @@ export function pgRepo(db: Db): AlertRepo {
       const out: FollowRow[] = [];
       for (const c of chunks(keys, KEYS_PER_QUERY)) {
         const rs = await db.query<FollowDbRow>(
-          'SELECT f.id AS fid, t.id AS "targetId", f.key AS key, t.channel AS ch, f.label AS label, t.endpoint AS endpoint, t.p256dh AS p256dh, t.auth AS auth, t.chat_id AS chat, f.alerted AS alerted, f.last_alert_at AS "lastAlertAt", f.last_l4_at AS "lastL4At", f.last_clear_at AS "lastClearAt" FROM follow f JOIN target t ON t.id = f.target_id WHERE f.key = ANY($1::text[]) ORDER BY f.id',
+          'SELECT f.id AS fid, t.id AS "targetId", f.key AS key, t.channel AS ch, f.label AS label, t.endpoint AS endpoint, t.p256dh AS p256dh, t.auth AS auth, t.chat_id AS chat, t.line_user AS "lineUser", f.alerted AS alerted, f.last_alert_at AS "lastAlertAt", f.last_l4_at AS "lastL4At", f.last_clear_at AS "lastClearAt" FROM follow f JOIN target t ON t.id = f.target_id WHERE f.key = ANY($1::text[]) ORDER BY f.id',
           [c],
         );
         for (const r of rs.rows) {
@@ -91,12 +101,7 @@ export function pgRepo(db: Db): AlertRepo {
     }),
 
     report: (r: Report) => guard(() => db.tx(async (t) => {
-      if (r.follows.length) {
-        await t.query(
-          'UPDATE follow AS f SET alerted = u.alerted, last_alert_at = u.a, last_l4_at = u.l4, last_clear_at = u.c FROM unnest($1::bigint[], $2::smallint[], $3::timestamptz[], $4::timestamptz[], $5::timestamptz[]) AS u(fid, alerted, a, l4, c) WHERE f.id = u.fid',
-          [r.follows.map((f) => f.fid), r.follows.map((f) => f.alerted), r.follows.map((f) => f.lastAlertAt), r.follows.map((f) => f.lastL4At), r.follows.map((f) => f.lastClearAt)],
-        );
-      }
+      await writeFollows(t, r.follows);
       if (r.deadTargets.length) await t.query('DELETE FROM target WHERE id = ANY($1::bigint[])', [r.deadTargets]);
       if (r.donePending.length) await t.query('DELETE FROM tg_pending WHERE id = ANY($1::bigint[])', [r.donePending]);
     })),

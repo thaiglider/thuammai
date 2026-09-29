@@ -5,7 +5,7 @@ import type { IpMode } from './client-ip';
 
 export interface ApiConfig {
   port: number; siteOrigin: string; siteUrl: string; rateKey: string;
-  tgToken?: string; tgSecret?: string; paused: boolean; ipMode: IpMode; trustedProxyHost: string; db: PgConn;
+  tgToken?: string; tgSecret?: string; lineSecret?: string; lineToken?: string; lineOff: boolean; paused: boolean; ipMode: IpMode; trustedProxyHost: string; db: PgConn;
   /** CI only: the "broken image" of the update/rollback test exits at start (Plan F2). */
   ciBreak: boolean;
 }
@@ -33,6 +33,7 @@ export function loadApiConfig(e: NodeJS.ProcessEnv, read: SecretReader): ConfigR
     cfg: {
       port: Number(e.PORT || 8080), siteOrigin: e.SITE_ORIGIN, siteUrl: withSlash(e.SITE_URL), rateKey,
       tgToken: read('TELEGRAM_BOT_TOKEN'), tgSecret: read('TELEGRAM_WEBHOOK_SECRET'),
+      lineSecret: read('LINE_CHANNEL_SECRET'), lineToken: read('LINE_CHANNEL_TOKEN'), lineOff: e.LINE_OFF === '1',
       paused: e.ALERTS_PAUSED === '1', ipMode: mode, trustedProxyHost: e.TRUSTED_PROXY_HOST || 'caddy', db, ciBreak: e.CI_BREAK === '1',
     },
   };
@@ -45,4 +46,5 @@ export const apiStartFlags = (c: ApiConfig, e: NodeJS.ProcessEnv): Counts => ({
   clock_offset: (e.THUAMMAI_CLOCK_OFFSET_MS ?? '').trim() !== '' && Number(e.THUAMMAI_CLOCK_OFFSET_MS) !== 0 ? 1 : 0,
   tg: c.tgToken && c.tgSecret ? 1 : 0,
   ci_break: c.ciBreak ? 1 : 0,
+  line: c.lineSecret && c.lineToken ? 1 : 0,
 });

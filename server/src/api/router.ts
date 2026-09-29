@@ -1,5 +1,6 @@
 import type { Deps, Env } from './env';
 import { err, json, toResponse } from './http';
+import { lineRoute } from './line';
 import { pushRoute } from './push';
 import { statusRoute } from './status';
 import { telegramRoute } from './telegram';
@@ -12,6 +13,7 @@ export async function handle(req: Request, env: Env, deps: Deps): Promise<Respon
     if (url.pathname === '/v1/status') return await statusRoute(req, env, deps);
     if (url.pathname === '/v1/push/subscription') return await pushRoute(req, env, deps);
     if (url.pathname === '/v1/telegram') return await telegramRoute(req, env, deps);
+    if (url.pathname === '/v1/line') return await lineRoute(req, env, deps);
     return err(404, 'not_found');
   } catch (e) {
     return toResponse(e);

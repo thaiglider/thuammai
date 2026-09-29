@@ -5,8 +5,10 @@ import type { Counts } from './log';
  * the same on Postgres (server/src/alerts/repo-pg.ts) and in tests. */
 export interface PlaceRow { k: string; lat: number; lon: number }
 export interface FollowRow {
-  fid: number; targetId: number; key: string; ch: 'push' | 'tg'; label: string | null;
+  fid: number; targetId: number; key: string; ch: 'push' | 'tg' | 'line'; label: string | null;
   endpoint: string | null; p256dh: string | null; auth: string | null; chat: number | null;
+  /** LINE user id of a 'line' target (phase 3C). */
+  lineUser: string | null;
   alerted: 0 | 3 | 4; lastAlertAt: string | null; lastL4At: string | null; lastClearAt: string | null;
 }
 export interface FollowUpdate { fid: number; alerted: 0 | 3 | 4; lastAlertAt: string | null; lastL4At: string | null; lastClearAt: string | null }

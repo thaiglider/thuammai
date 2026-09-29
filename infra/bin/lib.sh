@@ -11,7 +11,7 @@ LOCAL_IMAGE="thuammai-local"
 # Our own tag for the Postgres image the db runs (DB_IMAGE in .env): we never retag a public image.
 DB_LOCAL="thuammai-db"
 PROJECT="thuammai"
-SECRET_FILES="pg_superuser pg_owner pg_app rate_hmac_key vapid_private_key telegram_bot_token telegram_webhook_secret kuma_push_alerts kuma_push_backup kuma_push_deploy kuma_push_host restic_password restic_repository restic_env export_passphrase"
+SECRET_FILES="pg_superuser pg_owner pg_app rate_hmac_key vapid_private_key telegram_bot_token telegram_webhook_secret kuma_push_alerts kuma_push_backup kuma_push_deploy kuma_push_host restic_password restic_repository restic_env export_passphrase line_channel_secret line_channel_token"
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 say() { printf '%s\n' "$*"; }
@@ -62,6 +62,22 @@ secret_fix_modes() {
   chmod 700 "$TH/secrets"
   for f in "$TH/secrets"/*; do [ -f "$f" ] && chmod "$(secret_mode "$(basename "$f")")" "$f"; done
   return 0
+}
+# ensure_secret_files: every secret file compose may mount exists (empty when not configured), so a
+# release that adds a secret never makes docker create a directory in its place. An empty directory
+# docker already made is replaced; one with content is not ours to delete. Used by install and update.sh.
+ensure_secret_files() {
+  local s
+  mkdir -p "$TH/secrets"
+  chmod 700 "$TH/secrets"
+  for s in $SECRET_FILES; do
+    if [ -d "$TH/secrets/$s" ] && [ ! -L "$TH/secrets/$s" ]; then
+      rmdir "$TH/secrets/$s" 2>/dev/null || die "$TH/secrets/$s is a directory with files in it, not a secret file — look at it and remove it yourself, then run install again"
+      log "removed the empty directory docker made at secrets/$s"
+    fi
+    [ -e "$TH/secrets/$s" ] || secret_set "$s" ""
+  done
+  secret_fix_modes
 }
 
 release_dir() { printf '%s/releases/%s' "$TH" "$1"; }

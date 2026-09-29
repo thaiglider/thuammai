@@ -1,20 +1,22 @@
-import { CAPS } from '../core/alert-config';
-import type { FollowState, PointState } from '../core/alert-rule';
-import { alertShown } from '../core/hysteresis';
-import { assessPoint } from '../core/risk';
-import { pointReplyText, siteLink, tgAlertText } from '../core/tg-text';
-import type { Level } from '../core/types';
+import { CAPS, LINE } from '../core/alert-config';
+import type { FollowState } from '../core/alert-rule';
+import { siteLink, tgAlertText } from '../core/tg-text';
+import { pointAnswerText, type Stored } from './answer';
+import { lineFor, sendLine } from './line';
+import type { LineRepo } from './line-repo';
 import { errorCounts, type Counts, type LogEvent } from './log';
 import { capPlanned, evaluatePointsYielding, keysToQuery, planFollows, recomputeEp, toUpdate, type Planned, type PointEval } from './plan';
 import { newPushRun, sendPush, type PushRun, type SendNotification, type Vapid } from './push';
 import { RepoError, type AlertRepo, type FollowRow, type PendingRow } from './repo';
-import { inputAt, type Snapshot } from './snapshot';
+import type { Snapshot } from './snapshot';
 import { sendTelegram, tgSender, type Clock, type TgSend } from './telegram';
 
 export interface AlertEnv {
   VAPID_PUBLIC_KEY?: string; VAPID_PRIVATE_KEY?: string; VAPID_SUBJECT?: string;
   /** Telegram is on only when both are set; otherwise Telegram follows are deferred (not sent, not recorded). */
   TELEGRAM_BOT_TOKEN?: string; SITE_URL?: string;
+  /** LINE is on only with this token and SITE_URL (and a LineRepo). */
+  LINE_CHANNEL_TOKEN?: string;
 }
 export interface AlertDeps {
   repo: AlertRepo; env: AlertEnv;
@@ -25,6 +27,8 @@ export interface AlertDeps {
   tgSend?: TgSend;
   /** true once SIGTERM arrived: no new batch starts (spec §4.3 "หยุด"). */
   stopping?(): boolean;
+  /** LINE questions and pushes (phase 3C); absent → LINE off. */
+  lineRepo?: LineRepo;
 }
 /** No new send after this long from the start of the run (spec §7.5): below the 10-minute
  *  snapshot cycle and the 10-minute stuck-run watchdog of the alerts process. */
@@ -34,7 +38,6 @@ export const PUSH_CONCURRENCY = 100;
 export interface RunResult { event: LogEvent; counts: Counts; exitCode: number }
 /** Telegram for this run; its clock is the run's clock, so there is one send deadline. */
 interface Tg { send: TgSend; site: string; clock: Clock }
-type Stored = (key: string) => PointState | undefined;
 
 const chunks = <T>(xs: T[], n: number): T[][] => {
   const out: T[][] = [];
@@ -89,7 +92,8 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
   const queried = keysToQuery(ev.points, snap.gen);
   const follows: FollowRow[] = await d.repo.targets(queried);
   const planned = planFollows(follows, ev.points, snap.gen);
-  const capped = capPlanned(planned, { push: CAPS.pushPerRun, tg: CAPS.tgPerRun }, { push: true, tg: tg !== null });
+  const line = lineFor(d);
+  const capped = capPlanned(planned, { push: CAPS.pushPerRun, tg: CAPS.tgPerRun, line: LINE.maxApproved * LINE.placesPerUser }, { push: true, tg: tg !== null, line: line !== null });
   for (const p of capped.send) counts[p.kind!] = (counts[p.kind!] ?? 0) + 1;
   counts.deferred = capped.deferred;
 
@@ -139,6 +143,18 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
     }
   }
 
+  // LINE after Telegram (phase-3C spec §5.3), under the monthly budget (§6), same send deadline.
+  const lineSend = capped.send.filter((p) => p.f.ch === 'line' && p.f.lineUser !== null && p.msg !== null);
+  if (line && lineSend.length) {
+    halt();
+    if (run.timedOut || sigterm) counts.line_deferred = (counts.line_deferred ?? 0) + lineSend.length;
+    else {
+      const out = await sendLine(d, line, lineSend, snap.gen, run.deadline, run.clock);
+      add(counts, out.counts);
+      record(out.ok);
+    }
+  }
+
   if (run.stopped) counts.push_stopped = 1;
   // SIGTERM seen during the run (final review I1): the state is NOT saved, so alert_run.gen does
   // not move and the next process re-evaluates this same gen from the same stored state. Follows
@@ -179,18 +195,6 @@ async function answerPendingSafe(d: AlertDeps, snap: Snapshot, points: Map<strin
   }
 }
 
-/** The point's level as the card would show it (E10): this run's hysteresis for an evaluated
- *  place, else the stored one, else the raw level. */
-function pendingText(q: PendingRow, snap: Snapshot, points: Map<string, PointEval>, stored: Stored, site: string): string {
-  const link = siteLink(site, q.k);
-  if (!snap.ok) return pointReplyText({ unusable: true, gen: snap.gen || null }, link);
-  const a = assessPoint(q.lat, q.lon, inputAt(snap, q.lat, q.lon));
-  const st = stored(q.k);
-  const shownNow = points.get(q.k)?.step.shown ?? (st ? alertShown(st, a.level, snap.gen).shown : null);
-  const shown: Level = shownNow === 3 || shownNow === 4 ? shownNow : a.level;
-  return pointReplyText({ shown, a, gen: snap.gen }, link);
-}
-
 /** Answer the queued questions within the Telegram budget and the send deadline, in chunks of
  *  CAPS.batch: before each chunk SIGTERM is checked (then the rest stays queued for the next
  *  process), and each chunk is marked done right after it is sent — so a stop, a crash or a
@@ -209,7 +213,7 @@ async function answerPending(repo: AlertRepo, pending: PendingRow[], snap: Snaps
   for (const c of chunks(now, CAPS.batch)) {
     if (!tgStopped && !halted && sigterm()) { halted = true; counts.stopping = 1; }
     if (tgStopped || halted) { counts.pending_deferred += c.length; continue; }
-    const out = await sendTelegram(c.map((q) => ({ chat: q.chat, text: pendingText(q, snap, points, stored, tg.site), ref: q })), tg.send, tg.clock, run.deadline);
+    const out = await sendTelegram(c.map((q) => ({ chat: q.chat, text: pointAnswerText(q, snap, points, stored, tg.site), ref: q })), tg.send, tg.clock, run.deadline);
     if (out.stopped) {
       tgStopped = true;
       if (run.clock() >= run.deadline) run.timedOut = true;

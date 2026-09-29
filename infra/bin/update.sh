@@ -121,6 +121,16 @@ deploy() {
     RC=1
     return 0
   fi
+  # A release may add secret files (Plan G: line_channel_*): create them before any compose call of it.
+  # We sourced the INSTALLED release's lib.sh, so our SECRET_FILES is the old list — read the new
+  # release's list from the lib.sh we just extracted and run ensure_secret_files with that, in a
+  # subshell so the override never leaks into the rest of this script.
+  if ! ( SECRET_FILES="$(sed -n 's/^SECRET_FILES="\(.*\)"$/\1/p' "$(release_dir "$tag")/bin/lib.sh")"; [ -n "$SECRET_FILES" ] && ensure_secret_files ); then
+    kuma deploy down secret_files
+    log "update: could not create the secret files of $tag — not deploying"
+    RC=1
+    return 0
+  fi
   ver="$(version_of "$tag")"
   # … then back up, before anything touches the database.
   if ! pg_backup predeploy "$(date -u +%Y%m%dT%H%M%SZ)" >/dev/null; then

@@ -28,10 +28,8 @@ export function toResponse(e: unknown): Response {
   return err(503, 'unavailable');
 }
 
-/** A JSON body read through a byte-counting reader (Content-Length is not trusted alone). */
-export async function readJson(req: Request, max: number): Promise<unknown> {
-  const ct = (req.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
-  if (ct !== 'application/json') throw new HttpError(415, 'unsupported_media_type');
+/** The raw body through a byte-counting reader (Content-Length is not trusted alone): 413 over `max`. */
+export async function readBody(req: Request, max: number): Promise<Uint8Array> {
   const len = req.headers.get('content-length');
   if (len !== null && Number(len) > max) throw new HttpError(413, 'too_large');
   if (!req.body) throw new HttpError(400, 'bad_json');
@@ -51,6 +49,14 @@ export async function readJson(req: Request, max: number): Promise<unknown> {
   const buf = new Uint8Array(n);
   let o = 0;
   for (const p of parts) { buf.set(p, o); o += p.byteLength; }
+  return buf;
+}
+
+/** A JSON body read through readBody. */
+export async function readJson(req: Request, max: number): Promise<unknown> {
+  const ct = (req.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  if (ct !== 'application/json') throw new HttpError(415, 'unsupported_media_type');
+  const buf = await readBody(req, max);
   let text: string;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { throw new HttpError(400, 'bad_json'); }
   try { return JSON.parse(text); } catch { throw new HttpError(400, 'bad_json'); }

@@ -61,12 +61,15 @@ services:
       RATE_HMAC_KEY_FILE: /run/secrets/rate_hmac_key
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       TELEGRAM_WEBHOOK_SECRET_FILE: /run/secrets/telegram_webhook_secret
+      LINE_CHANNEL_SECRET_FILE: /run/secrets/line_channel_secret
+      LINE_CHANNEL_TOKEN_FILE: /run/secrets/line_channel_token
+      LINE_OFF: ${LINE_OFF:-0}
       SITE_ORIGIN: ${SITE_ORIGIN:-}
       SITE_URL: ${SITE_URL:-}
       ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
       CLIENT_IP_MODE: ${CLIENT_IP_MODE:-direct}
       TRUSTED_PROXY_HOST: ${TRUSTED_PROXY_HOST:-caddy}
-    secrets: [pg_app, rate_hmac_key, telegram_bot_token, telegram_webhook_secret]
+    secrets: [pg_app, rate_hmac_key, telegram_bot_token, telegram_webhook_secret, line_channel_secret, line_channel_token]
     tmpfs: ["/tmp:size=16m,mode=1777"]
     networks:
       internal: {}
@@ -106,9 +109,11 @@ services:
       VAPID_SUBJECT: ${VAPID_SUBJECT:-}
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       KUMA_PUSH_ALERTS_FILE: /run/secrets/kuma_push_alerts
+      LINE_CHANNEL_TOKEN_FILE: /run/secrets/line_channel_token
+      LINE_OFF: ${LINE_OFF:-0}
       SITE_URL: ${SITE_URL:-}
       ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
-    secrets: [pg_app, vapid_private_key, telegram_bot_token, kuma_push_alerts]
+    secrets: [pg_app, vapid_private_key, telegram_bot_token, kuma_push_alerts, line_channel_token]
     tmpfs: ["/tmp:size=128m,mode=1777"]
     networks: [internal, egress]
     depends_on:
@@ -152,7 +157,8 @@ services:
       API_HOST: ${API_HOST:-}
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       TELEGRAM_WEBHOOK_SECRET_FILE: /run/secrets/telegram_webhook_secret
-    secrets: [telegram_bot_token, telegram_webhook_secret]
+      LINE_CHANNEL_TOKEN_FILE: /run/secrets/line_channel_token
+    secrets: [telegram_bot_token, telegram_webhook_secret, line_channel_token]
     volumes:
       - ${THUAMMAI_HOME:?}/secrets/kuma_push_alerts:/run/host-secrets/kuma_push_alerts:ro
       - ${THUAMMAI_HOME:?}/secrets/kuma_push_backup:/run/host-secrets/kuma_push_backup:ro
@@ -238,6 +244,8 @@ secrets:
   vapid_private_key: { file: "${THUAMMAI_HOME:?}/secrets/vapid_private_key" }
   telegram_bot_token: { file: "${THUAMMAI_HOME:?}/secrets/telegram_bot_token" }
   telegram_webhook_secret: { file: "${THUAMMAI_HOME:?}/secrets/telegram_webhook_secret" }
+  line_channel_secret: { file: "${THUAMMAI_HOME:?}/secrets/line_channel_secret" }
+  line_channel_token: { file: "${THUAMMAI_HOME:?}/secrets/line_channel_token" }
   kuma_push_alerts: { file: "${THUAMMAI_HOME:?}/secrets/kuma_push_alerts" }
   restic_password: { file: "${THUAMMAI_HOME:?}/secrets/restic_password" }
   restic_repository: { file: "${THUAMMAI_HOME:?}/secrets/restic_repository" }

@@ -20,7 +20,9 @@ export async function startApi(e: NodeJS.ProcessEnv): Promise<Server | null> {
   const pool = createPool(c.cfg.db, { max: 5, applicationName: 'thuammai-api' });
   const env: Env = {
     db: poolDb(pool), SITE_ORIGIN: c.cfg.siteOrigin, SITE_URL: c.cfg.siteUrl, RATE_HMAC_KEY: c.cfg.rateKey,
-    TELEGRAM_BOT_TOKEN: c.cfg.tgToken, TELEGRAM_WEBHOOK_SECRET: c.cfg.tgSecret, ALERTS_PAUSED: c.cfg.paused,
+    TELEGRAM_BOT_TOKEN: c.cfg.tgToken, TELEGRAM_WEBHOOK_SECRET: c.cfg.tgSecret,
+    LINE_CHANNEL_SECRET: c.cfg.lineSecret, LINE_CHANNEL_TOKEN: c.cfg.lineToken, LINE_OFF: c.cfg.lineOff,
+    ALERTS_PAUSED: c.cfg.paused,
   };
   const trust = trustedResolver(c.cfg.trustedProxyHost);
   await trust.refresh();

@@ -33,7 +33,8 @@ on_exit() {
 trap on_exit EXIT
 
 # lock_env: every command that edits .env or secrets holds the ops lock (F2-4) first.
-# refuse_during_restore: pause, resume, restart, telegram token, kuma and install would start api/alerts
+# refuse_during_restore: pause, resume, restart, telegram/line token, kuma and install would start api/alerts
+# (admin link/unlink would write to it)
 # on a database a stopped-half-way restore may have left incomplete — the owner finishes the restore first.
 refuse_during_restore() {
   if restore_blocking; then
@@ -51,6 +52,8 @@ thuammai caddy add                           (append our site block to the share
 thuammai kuma                                (Uptime Kuma push URLs)
 thuammai telegram set|delete                 (webhook)
 thuammai telegram token [--file <path>]      (bot token from stdin, a hidden prompt or a file — never an argument)
+thuammai line token [--file <path>] | status | off | on   (LINE: two lines — channel secret, token — from a file or stdin, never an argument)
+thuammai admin link | unlink                 (the LINE admin in Telegram: /admin <code>)
 thuammai backup now|export | restore [--yes] <daily/YYYY-MM-DD.dump|predeploy> | restore-test
 thuammai update now | retry <release id|all> | rollback | restart <db|api|alerts>
 thuammai secrets show | offsite setup [--env-file <path>]|check|snapshots | cron install|remove
@@ -171,16 +174,7 @@ cmd_install() {
   tag="$(current_tag)"
   mkdir -p "$TH/releases" "$TH/logs" "$TH/run" "$TH/exports" "$TH/restore" "$TH/secrets" "$TH/backups/daily" "$TH/backups/predeploy"
   chmod 700 "$TH/backups" "$TH/backups/daily" "$TH/backups/predeploy"
-  for s in $SECRET_FILES; do
-    # A bind mount whose source file was missing makes docker create an (empty, root-owned)
-    # directory there; our 0700 secrets directory lets us remove it. Never one with content.
-    if [ -d "$TH/secrets/$s" ] && [ ! -L "$TH/secrets/$s" ]; then
-      rmdir "$TH/secrets/$s" 2>/dev/null || die "$TH/secrets/$s is a directory with files in it, not a secret file — look at it and remove it yourself, then run install again"
-      log "install: removed the empty directory docker made at secrets/$s"
-    fi
-    [ -e "$TH/secrets/$s" ] || secret_set "$s" ""
-  done
-  secret_fix_modes
+  ensure_secret_files
   env_set THUAMMAI_HOME "$TH"; env_set THUAMMAI_UID "$(id -u)"; env_set THUAMMAI_GID "$(id -g)"; env_set IMAGE_TAG "$tag"
   if [ -n "$from" ]; then
     fetch_bundle "$from" "$noni"
@@ -189,6 +183,7 @@ cmd_install() {
   env_default SITE_ORIGIN https://thaiglider.github.io
   env_default SITE_URL https://thaiglider.github.io/thuammai/
   env_default ALERTS_PAUSED 0
+  env_default LINE_OFF 0
   env_default PROXY_NETWORK ai-stack_ai-stack
   env_default TRUSTED_PROXY_HOST caddy
   env_default CLIENT_IP_MODE direct
@@ -382,6 +377,13 @@ cmd_finish() {
       printf '%s\n' "$out" | grep -q '^last error: none$' || die "Telegram webhook reports an error (see above)"
     fi
   fi
+  if [ -s "$TH/secrets/line_channel_secret" ] && [ -s "$TH/secrets/line_channel_token" ]; then
+    if [ "$(env_get ALERTS_PAUSED)" = 1 ] || [ "$(env_get LINE_OFF)" = 1 ]; then
+      say "LINE: paused or off — the LINE webhook is set by thuammai resume / thuammai line on"
+    else
+      line_webhook || die "the LINE webhook test failed (see above) — docs/ops/line-owner-setup.md"
+    fi
+  fi
   for m in alerts backup deploy host; do kuma "$m" up finish; done
   env_set FINISHED 1
   say "finished. Uptime Kuma monitors should turn Up within 3 minutes. / เสร็จแล้ว"
@@ -393,7 +395,7 @@ cmd_pause() {
   env_set ALERTS_PAUSED 1
   compose up -d --force-recreate api alerts
   if [ -s "$TH/secrets/telegram_bot_token" ]; then tools_run node dist/tools/telegram.mjs delete || log "pause: deleteWebhook failed"; fi
-  say "paused: no alerts, no new sign-ups, the bot says 'หยุดชั่วคราว'. Undo: thuammai resume"
+  say "paused: no alerts (Web Push, Telegram, LINE), no new sign-ups; the bots say 'หยุดชั่วคราว'. Undo: thuammai resume"
 }
 cmd_resume() {
   lock_env
@@ -401,6 +403,7 @@ cmd_resume() {
   env_set ALERTS_PAUSED 0
   compose up -d --force-recreate api alerts
   if [ -s "$TH/secrets/telegram_bot_token" ] && [ "$(env_get FINISHED)" = 1 ]; then tools_run node dist/tools/telegram.mjs set || log "resume: setWebhook failed"; fi
+  line_webhook_if_ready || log "resume: the LINE webhook test failed"
   say "resumed / กลับมาทำงานแล้ว"
 }
 
@@ -445,6 +448,96 @@ cmd_telegram_token() {
   compose up -d --force-recreate api alerts
   if [ "$(env_get FINISHED)" = 1 ] && [ "$(env_get ALERTS_PAUSED)" != 1 ]; then tools_run node dist/tools/telegram.mjs set || log "telegram token: setWebhook failed"; fi
   if [ -n "$u" ]; then say "bot @$u saved. If it changed, set the GitHub variable TELEGRAM_BOT_USERNAME=$u"; else say "token saved (not checked with Telegram yet; TELEGRAM_BOT_USERNAME kept: $(env_get TELEGRAM_BOT_USERNAME))"; fi
+}
+
+# line_webhook: set https://<API_HOST>/v1/line at LINE and run LINE's webhook test (spec §9).
+line_webhook() {
+  local out
+  out="$(tools_run node dist/tools/line.mjs set 2>&1)" || true
+  say "$out"
+  printf '%s\n' "$out" | grep -q '^webhook test: ok$'
+}
+# line_webhook_if_ready: only when LINE is configured, finished, not paused and not off.
+line_webhook_if_ready() {
+  [ -s "$TH/secrets/line_channel_secret" ] && [ -s "$TH/secrets/line_channel_token" ] || return 0
+  [ "$(env_get FINISHED)" = 1 ] && [ "$(env_get ALERTS_PAUSED)" != 1 ] && [ "$(env_get LINE_OFF)" != 1 ] || return 0
+  line_webhook
+}
+
+# line token [--file <path>]: line 1 the channel secret, line 2 the channel access token (the order of
+# .secrete/line.txt) — from a file, hidden prompts, or stdin; never an argument (G-16).
+cmd_line_token() {
+  local src="" sec tok old_sec old_tok out rc=0
+  lock_env
+  refuse_during_restore
+  case "${1:-}" in
+    --file) [ -f "${2:-}" ] || die "thuammai line token --file <path>"; src="$(cat "$2")" ;;
+    "")
+      if [ -t 0 ]; then
+        sec="$(ask_secret 'LINE Channel secret, hidden / Channel secret (ไม่แสดงบนจอ): ')" || sec=""
+        tok="$(ask_secret 'LINE Channel access token (long-lived), hidden / Channel access token (ไม่แสดงบนจอ): ')" || tok=""
+        src="$sec"$'\n'"$tok"
+      else
+        src="$(cat)"
+      fi
+      ;;
+    *) die "thuammai line token [--file <path>] — read from a file or stdin, never from an argument" ;;
+  esac
+  sec="$(printf '%s\n' "$src" | sed -n 1p | tr -d ' \r\t')"
+  tok="$(printf '%s\n' "$src" | sed -n 2p | tr -d ' \r\t')"
+  src=""
+  [[ $sec =~ ^[0-9a-f]{32}$ ]] || die "line 1 must be the Channel secret (32 hex characters) — are the two lines swapped? / บรรทัดแรกต้องเป็น Channel secret"
+  [ -n "$tok" ] || die "line 2 must be the Channel access token / บรรทัดที่สองต้องเป็น Channel access token"
+  old_sec="$(secret_get line_channel_secret)"
+  old_tok="$(secret_get line_channel_token)"
+  secret_set line_channel_secret "$sec"
+  secret_set line_channel_token "$tok"
+  sec=""
+  tok=""
+  out="$(tools_run node dist/tools/line.mjs check 2>/dev/null)" || rc=$?
+  case "$rc" in
+    0) say "LINE $(printf '%s\n' "$out" | sed -n 's/^bot=//p' | head -n 1) saved / บันทึกแล้ว" ;;
+    3)
+      secret_set line_channel_secret "$old_sec"
+      secret_set line_channel_token "$old_tok"
+      die "LINE rejected this token — kept the previous pair / LINE ไม่รับ token นี้ — ใช้ของเดิมต่อ"
+      ;;
+    *) log "warning: could not reach LINE to check the token — saved it anyway; run 'thuammai line token' again later / ติดต่อ LINE ไม่ได้ — บันทึกไว้แล้ว" ;;
+  esac
+  old_sec=""
+  old_tok=""
+  compose up -d --force-recreate api alerts
+  line_webhook_if_ready || log "line token: the LINE webhook test failed — see docs/ops/line-owner-setup.md"
+}
+cmd_line_off() {
+  lock_env
+  refuse_during_restore
+  env_set LINE_OFF 1
+  compose up -d --force-recreate api alerts
+  say "LINE off: no LINE alerts or answers; the LINE bot says 'ปิดชั่วคราว'. LINE has no call that removes a webhook — for total silence switch 'Use webhook' off in the LINE Developers Console. Undo: thuammai line on"
+}
+cmd_line_on() {
+  lock_env
+  refuse_during_restore
+  env_set LINE_OFF 0
+  compose up -d --force-recreate api alerts
+  line_webhook_if_ready || log "line on: the LINE webhook test failed — run thuammai finish"
+  say "LINE on / เปิด LINE แล้ว"
+}
+# admin link|unlink write to the database: never while a restore runs (the lock) or left it half-done.
+cmd_admin_link() {
+  local code
+  lock_env
+  refuse_during_restore
+  code="$(compose exec -T api node dist/tools/admin.mjs link 2>/dev/null | sed -n 's/^code=//p' | head -n 1)" || true
+  [[ $code =~ ^[A-Z0-9]{8}$ ]] || die "could not make a link code (is api running? thuammai status)"
+  say "In the Telegram bot send this within 10 minutes / ในบอท Telegram พิมพ์ภายใน 10 นาที:"
+  say "  /admin $code"
+}
+cmd_admin_unlink() {
+  lock_env
+  refuse_during_restore
+  compose exec -T api node dist/tools/admin.mjs unlink
 }
 
 # restart <db|api|alerts>: recreate one service under the ops lock, so it never races an update,
@@ -614,6 +707,22 @@ main() {
         set | delete) tools_run node dist/tools/telegram.mjs "$1" ;;
         token) shift; cmd_telegram_token "$@" ;;
         *) die "thuammai telegram set|delete|token" ;;
+      esac
+      ;;
+    line)
+      case "${1:-}" in
+        token) shift; cmd_line_token "$@" ;;
+        status) compose exec -T api node dist/tools/line.mjs status ;;
+        off) cmd_line_off ;;
+        on) cmd_line_on ;;
+        *) die "thuammai line token|status|off|on" ;;
+      esac
+      ;;
+    admin)
+      case "${1:-}" in
+        link) cmd_admin_link ;;
+        unlink) cmd_admin_unlink ;;
+        *) die "thuammai admin link|unlink" ;;
       esac
       ;;
     backup) cmd_backup "$@" ;;

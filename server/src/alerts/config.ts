@@ -23,7 +23,7 @@ export function loadAlertsConfig(e: NodeJS.ProcessEnv, read: SecretReader): Conf
     ok: true,
     cfg: {
       siteUrl,
-      env: { VAPID_PUBLIC_KEY: e.VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: priv, VAPID_SUBJECT: e.VAPID_SUBJECT, TELEGRAM_BOT_TOKEN: read('TELEGRAM_BOT_TOKEN'), SITE_URL: siteUrl },
+      env: { VAPID_PUBLIC_KEY: e.VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: priv, VAPID_SUBJECT: e.VAPID_SUBJECT, TELEGRAM_BOT_TOKEN: read('TELEGRAM_BOT_TOKEN'), LINE_CHANNEL_TOKEN: e.LINE_OFF === '1' ? undefined : read('LINE_CHANNEL_TOKEN'), SITE_URL: siteUrl },
       paused: e.ALERTS_PAUSED === '1', kumaUrl: read('KUMA_PUSH_ALERTS') ?? null, db, tmpDir: e.TMPDIR || '/tmp', clockOffsetMs,
     },
   };
@@ -35,4 +35,5 @@ export const alertsStartFlags = (c: AlertsConfig): Counts => ({
   clock_offset: c.clockOffsetMs !== 0 ? 1 : 0,
   tg: c.env.TELEGRAM_BOT_TOKEN ? 1 : 0,
   kuma: c.kumaUrl ? 1 : 0,
+  line: c.env.LINE_CHANNEL_TOKEN ? 1 : 0,
 });

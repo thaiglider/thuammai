@@ -1,10 +1,13 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { answerLineQuestions, refreshLineUsage } from '../../../src/alerts/line';
+import { lineMonth, quotaLow } from '../../../src/alerts/line-budget';
 import type { Counts, LogEvent } from '../../../src/alerts/log';
 import { answerQuestions, NO_SNAPSHOT, runAlerts, type AlertDeps, type RunResult } from '../../../src/alerts/main';
 import { loadSnapshot, refreshFreshness, type Snapshot } from '../../../src/alerts/snapshot';
 import type { ProvinceGeo } from '../../../src/core/types';
 import type { Db } from '../db/db';
+import { readLineUsage } from '../line/store';
 import { runCleanup } from './cleanup';
 import { downloadSnapshot, fetchMetaGen, genInFuture } from './fetch-snapshot';
 import { healthFlags } from './health-flags';
@@ -41,6 +44,15 @@ const newer = (gen: string, than: string | null) => than === null || Date.parse(
 const stopping = (d: LoopDeps): boolean => d.alert.stopping?.() === true;
 const retryable = (r: RunResult) => r.event === 'error' || r.counts.db_unavailable === 1;
 
+/** LINE questions (phase-3C spec §5.2): never lets a failure stop the tick. */
+async function lineAnswers(d: LoopDeps, s: LoopState, now: Date): Promise<void> {
+  try {
+    add(s.tickCounts, await answerLineQuestions(d.alert, s.snap ? refreshFreshness(s.snap, now) : NO_SNAPSHOT));
+  } catch {
+    add(s.tickCounts, { line_pending_error: 1 });
+  }
+}
+
 /** Download + load one snapshot into a throw-away directory; null when it must be fetched again
  *  (download failed, or loadSnapshot saw files from two runs / a missing file — F1-10). */
 async function download(d: LoopDeps, s: LoopState, now: Date, t: number): Promise<Snapshot | null> {
@@ -66,6 +78,9 @@ export async function tick(d: LoopDeps, s: LoopState): Promise<void> {
   const now = d.alert.now();
   s.ticks++;
   if (!d.paused) {
+    // LINE first, from the snapshot in memory (G-13): the download below may take up to 60 s of the
+    // reply token's minute. With nothing in memory yet, wait for the download instead.
+    if (s.snap && !stopping(d)) await lineAnswers(d, s, now);
     let ran = false;
     const t = now.getTime();
     const gen = await fetchMetaGen(d.siteUrl, d.alert.fetch, t);
@@ -109,6 +124,17 @@ export async function tick(d: LoopDeps, s: LoopState): Promise<void> {
       add(s.tickCounts, q.counts);
       if (q.counts.tg_auth) s.lastCounts = { ...(s.lastCounts ?? {}), tg_auth: q.counts.tg_auth };
     }
+    // Questions that came during the download or the run (and the first tick after a start).
+    if (!stopping(d)) await lineAnswers(d, s, now);
+    if (!stopping(d)) {
+      try {
+        const rc = await refreshLineUsage(d.alert, now);
+        add(s.tickCounts, rc);
+        if (rc.line_auth) s.lastCounts = { ...(s.lastCounts ?? {}), line_auth: 1 };
+      } catch {
+        add(s.tickCounts, { line_check_error: 1 });
+      }
+    }
   }
   // Step 6: daily cleanup (also while paused — deleting old data is a promise to users).
   const day = bkk(now).toISOString().slice(0, 10);
@@ -120,13 +146,15 @@ export async function tick(d: LoopDeps, s: LoopState): Promise<void> {
   let runGen: string | null = null;
   let usage: CapsUsage | null = null;
   let dbOk = true;
+  let lineLow = false;
   try {
     runGen = await storedGen(d.db);
     usage = await capsUsage(d.db, now.toISOString().slice(0, 10));
+    lineLow = quotaLow(await readLineUsage(d.db, lineMonth(now)));
   } catch {
     dbOk = false;
   }
-  s.flags = healthFlags({ paused: d.paused, now, pagesGen: s.pagesGen, runGen, lastCounts: s.lastCounts, deferredStreak: s.deferredStreak, usage, fetchFailingSince: s.fetchFailingSince, dbOk });
+  s.flags = healthFlags({ paused: d.paused, now, pagesGen: s.pagesGen, runGen, lastCounts: s.lastCounts, deferredStreak: s.deferredStreak, usage, fetchFailingSince: s.fetchFailingSince, dbOk, lineLow });
   // Step 8: one summary line every 60 ticks.
   if (s.ticks % TICK_LOG_EVERY === 0) {
     d.log('tick', { ticks: s.ticks, ...s.tickCounts });

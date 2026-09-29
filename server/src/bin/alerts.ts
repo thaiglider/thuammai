@@ -4,10 +4,12 @@ import type { AlertDeps } from '../../../src/alerts/main';
 import { loadProvinces } from '../../../src/alerts/snapshot';
 import { alertsStartFlags, loadAlertsConfig } from '../alerts/config';
 import { kumaPush } from '../alerts/kuma';
+import { pgLineRepo } from '../alerts/line-repo-pg';
 import { pgAdvisoryLock } from '../alerts/lock';
 import { startAlerts } from '../alerts/main';
 import { pgRepo } from '../alerts/repo-pg';
 import { heartbeat } from '../alerts/run-state';
+import { pgWakeClient, wakeListener } from '../alerts/wake';
 import { createPool, poolDb } from '../db/pg';
 import { installCrashHandler, onceExit } from '../crash';
 import { fileSecrets } from '../secrets';
@@ -36,6 +38,7 @@ const alert: AlertDeps = {
   fetch: (i, init) => fetch(i, init),
   sendNotification: (sub, payload, opts) => webpush.sendNotification(sub, payload, opts),
   sleep,
+  lineRepo: pgLineRepo(db),
 };
 const log = (event: Parameters<typeof logLine>[1], counts: Record<string, number>) => logLine('alerts', event, counts);
 const handle = startAlerts({
@@ -52,5 +55,8 @@ const handle = startAlerts({
   log,
   startFlags: alertsStartFlags(cfg),
 });
-process.once('SIGTERM', () => { void handle.stop(); });
-process.once('SIGINT', () => { void handle.stop(); });
+// NOTIFY thuammai_wake (a LINE location was queued) → tick soon (phase-3C spec §5.2).
+const wake = wakeListener({ client: pgWakeClient(cfg.db), onWake: () => handle.wake(), sleep, log: (c) => log('error', c) });
+const stop = () => { void wake.stop(); void handle.stop(); };
+process.once('SIGTERM', stop);
+process.once('SIGINT', stop);

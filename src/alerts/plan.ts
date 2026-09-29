@@ -95,8 +95,8 @@ export function planFollows(follows: FollowRow[], points: Map<string, PointEval>
 
 /** Per-run caps (spec §5.1 step 6). Over the cap, or on a channel that is off: not sent and not
  *  recorded, so the next run re-evaluates with a newer snapshot. */
-export function capPlanned(planned: Planned[], caps: { push: number; tg: number }, channels: { push: boolean; tg: boolean }): { send: Planned[]; stateOnly: Planned[]; deferred: number } {
-  const used = { push: 0, tg: 0 };
+export function capPlanned(planned: Planned[], caps: { push: number; tg: number; line: number }, channels: { push: boolean; tg: boolean; line: boolean }): { send: Planned[]; stateOnly: Planned[]; deferred: number } {
+  const used = { push: 0, tg: 0, line: 0 };
   const send: Planned[] = [];
   const stateOnly: Planned[] = [];
   let deferred = 0;

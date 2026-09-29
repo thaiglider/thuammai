@@ -12,6 +12,8 @@ export interface HealthInput {
   /** Since when meta/snapshot fetching has failed without a success (ms), or null. */
   fetchFailingSince: number | null;
   dbOk: boolean;
+  /** LINE budget has ≤ reserve left (phase 3C). */
+  lineLow: boolean;
 }
 export const GEN_LAG_MIN = 20;
 export const FETCH_ERROR_MIN = 10;
@@ -26,6 +28,8 @@ export function healthFlags(h: HealthInput): string[] {
   else if (h.dbOk && (h.runGen === null || (Date.parse(h.pagesGen) - Date.parse(h.runGen)) / 60e3 > GEN_LAG_MIN)) out.push('gen_lag');
   if (h.lastCounts?.push_stopped) out.push('push_stopped');
   if (h.lastCounts?.tg_auth) out.push('tg_auth');
+  if (h.lastCounts?.line_auth) out.push('line_auth');
+  if (h.lineLow) out.push('line_quota_low');
   if (h.deferredStreak >= 3) out.push('deferred');
   const u = h.usage;
   if (u && (u.targets >= 0.7 * CAPS.maxTargets || u.places >= 0.7 * CAPS.maxPlaces || u.newTargetsToday >= 0.7 * CAPS.newTargetsPerDay)) out.push('cap_70');
@@ -33,5 +37,7 @@ export function healthFlags(h: HealthInput): string[] {
   return out;
 }
 
-/** Up only when nothing but "paused" (intentional) is flagged. */
-export const kumaStatus = (flags: string[]): 'up' | 'down' => (flags.every((f) => f === 'paused') ? 'up' : 'down');
+/** Flags that inform without paging (intentional pause; LINE problems the admin hears about in Telegram, G-9). */
+const INFO_FLAGS = new Set(['paused', 'line_auth', 'line_quota_low']);
+/** Up only when nothing but informational flags is set. */
+export const kumaStatus = (flags: string[]): 'up' | 'down' => (flags.every((f) => INFO_FLAGS.has(f)) ? 'up' : 'down');
