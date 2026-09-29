@@ -40,12 +40,16 @@ export async function markLineExhausted(db: Db, month: string): Promise<boolean>
   return (await db.query('INSERT INTO line_usage (month, exhausted) VALUES ($1, true) ON CONFLICT (month) DO UPDATE SET exhausted = true WHERE NOT line_usage.exhausted RETURNING month', [month])).rows.length > 0;
 }
 
-export type NoticeKind = 'held' | 'low' | 'auth';
-/** true the first time per kind and Bangkok day (the admin hears once a day, spec §4.2). */
+export type NoticeKind = 'held' | 'low' | 'auth' | 'exhausted';
+/** true the first time per kind and Bangkok day (the admin hears once a day, spec §4.2). `exhausted`
+ *  (Change B): a 429 can flip `exhausted` true→false→true within a day as LINE's own consumption
+ *  figure lags, so the day gate — not just the month-flip in `markLineExhausted` — keeps the admin's
+ *  "LINE exhausted" notice to once a day. */
 export async function noticeOnce(db: Db, month: string, kind: NoticeKind, day: string): Promise<boolean> {
   if (kind === 'held') return (await db.query('INSERT INTO line_usage (month, held_notice_day) VALUES ($1, $2) ON CONFLICT (month) DO UPDATE SET held_notice_day = excluded.held_notice_day WHERE line_usage.held_notice_day IS DISTINCT FROM excluded.held_notice_day RETURNING month', [month, day])).rows.length > 0;
   if (kind === 'low') return (await db.query('INSERT INTO line_usage (month, low_notice_day) VALUES ($1, $2) ON CONFLICT (month) DO UPDATE SET low_notice_day = excluded.low_notice_day WHERE line_usage.low_notice_day IS DISTINCT FROM excluded.low_notice_day RETURNING month', [month, day])).rows.length > 0;
-  return (await db.query('INSERT INTO line_usage (month, auth_notice_day) VALUES ($1, $2) ON CONFLICT (month) DO UPDATE SET auth_notice_day = excluded.auth_notice_day WHERE line_usage.auth_notice_day IS DISTINCT FROM excluded.auth_notice_day RETURNING month', [month, day])).rows.length > 0;
+  if (kind === 'auth') return (await db.query('INSERT INTO line_usage (month, auth_notice_day) VALUES ($1, $2) ON CONFLICT (month) DO UPDATE SET auth_notice_day = excluded.auth_notice_day WHERE line_usage.auth_notice_day IS DISTINCT FROM excluded.auth_notice_day RETURNING month', [month, day])).rows.length > 0;
+  return (await db.query('INSERT INTO line_usage (month, exhausted_notice_day) VALUES ($1, $2) ON CONFLICT (month) DO UPDATE SET exhausted_notice_day = excluded.exhausted_notice_day WHERE line_usage.exhausted_notice_day IS DISTINCT FROM excluded.exhausted_notice_day RETURNING month', [month, day])).rows.length > 0;
 }
 
 /** unfollow, "เลิก", or LINE answering 400 for this person: everything that holds the user id, in

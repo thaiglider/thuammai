@@ -5,11 +5,12 @@ import { alertKey, parseAlertKey } from '../../../src/core/alert-key';
 import { parseCoords } from '../../../src/core/coords';
 import { inThailand } from '../../../src/core/geo';
 import {
-  LINE_ALREADY_APPROVED_TH, LINE_CANCEL_BUTTON_TH, LINE_CMD, LINE_MAX_FOLLOWS_TH, LINE_NO_FOLLOWS_TH, LINE_NOT_APPROVED_FOLLOW_TH, LINE_OTHER_TH,
-  LINE_REQUEST_LIMIT_TH, LINE_REQUEST_PENDING_TH, LINE_REQUESTED_TH, LINE_REQUESTS_CLOSED_TH, LINE_STOP_ALL_BUTTON_TH, LINE_STOP_CONFIRM_TH, LINE_STOPPED_TH,
-  lineFollowedText, lineHelpText, lineListText, lineOffText, lineRejectedText, lineUnfollowButtonText, lineWelcomeText, LPB, type HeldReason, type LineState,
+  LINE_ALIAS, LINE_ALREADY_APPROVED_TH, LINE_CANCEL_BUTTON_TH, LINE_CMD, LINE_MAX_FOLLOWS_TH, LINE_NO_FOLLOWS_TH, LINE_NOT_APPROVED_FOLLOW_TH, LINE_OTHER_TH,
+  LINE_RENAME_HOWTO_TH, LINE_RENAME_RE, LINE_REQUEST_LIMIT_TH, LINE_REQUEST_PENDING_TH, LINE_REQUESTED_TH, LINE_REQUESTS_CLOSED_TH, LINE_STOP_ALL_BUTTON_TH,
+  LINE_STOP_CONFIRM_TH, LINE_STOPPED_TH, lineFollowedText, lineHelpText, lineListText, lineOffText, lineRejectedText, lineRenamedText, lineUnfollowButtonText,
+  lineWelcomeText, LPB, type HeldReason, type LineState,
 } from '../../../src/core/line-text';
-import { ALREADY_TH, coordsReadText, dbDownText, defaultLabel, fullSystemText, NOT_A_REPORT_TH, NOT_FOUND_TH, OUTSIDE_TH, pausedText, unfollowedText } from '../../../src/core/tg-text';
+import { ALREADY_TH, coordsReadText, dbDownText, defaultLabel, fullSystemText, NOT_A_REPORT_TH, NOT_FOUND_TH, OUTSIDE_TH, pausedText, tgName, unfollowedText } from '../../../src/core/tg-text';
 import { deleteLineUser } from '../line/store';
 import { addCounts, capsAllow } from './caps';
 import type { Deps, Env } from './env';
@@ -54,9 +55,14 @@ export async function lineReply(c: LineCtx, text: string, actions?: LineAction[]
   await c.api.reply(c.token, [textMsg(text, actions)]);
 }
 
-/** While paused or LINE_OFF (G-5, G-6): listing, deleting and the how-to still work. */
+/** While paused or LINE_OFF (G-5, G-6): listing, deleting, the how-to, their aliases and renaming
+ *  (it only changes the person's own label) still work. */
 const allowedWhileOff = (text: string | null, pb: string | null): boolean =>
-  (text !== null && (text === LINE_CMD.list || text === LINE_CMD.stop || text === LINE_CMD.help)) ||
+  (text !== null && (
+    text === LINE_CMD.list || text === LINE_CMD.stop || text === LINE_CMD.help ||
+    LINE_ALIAS.list.test(text) || LINE_ALIAS.stop.test(text) || LINE_ALIAS.help.test(text) ||
+    LINE_RENAME_RE.test(text)
+  )) ||
   (pb !== null && (LPB.unfollow.test(pb) || LPB.stopAll.test(pb) || LPB.dismiss.test(pb)));
 
 async function handleEvent(e: unknown, env: Env, deps: Deps): Promise<void> {
@@ -98,9 +104,11 @@ async function handleEvent(e: unknown, env: Env, deps: Deps): Promise<void> {
 
 async function onText(c: LineCtx, text: string): Promise<void> {
   if (text === LINE_CMD.request) return onRequest(c);
-  if (text === LINE_CMD.list) return onList(c);
-  if (text === LINE_CMD.stop) return lineReply(c, LINE_STOP_CONFIRM_TH, [pbAction(LINE_STOP_ALL_BUTTON_TH, 'ld:all'), pbAction(LINE_CANCEL_BUTTON_TH, 'no')]);
-  if (text === LINE_CMD.help) return lineReply(c, lineHelpText(c.env.SITE_URL), [LOCATION_ACTION]);
+  if (text === LINE_CMD.list || LINE_ALIAS.list.test(text)) return onList(c);
+  if (text === LINE_CMD.stop || LINE_ALIAS.stop.test(text)) return lineReply(c, LINE_STOP_CONFIRM_TH, [pbAction(LINE_STOP_ALL_BUTTON_TH, 'ld:all'), pbAction(LINE_CANCEL_BUTTON_TH, 'no')]);
+  if (text === LINE_CMD.help || LINE_ALIAS.help.test(text)) return lineReply(c, lineHelpText(c.env.SITE_URL), [LOCATION_ACTION]);
+  const rename = text.match(LINE_RENAME_RE);
+  if (rename) return onRename(c, Number(rename[1]), rename[2]!);
   // Typed coordinates or a full map link (LINE on a computer may not send a location, F10).
   const typed = parseCoords(text);
   if (typed) return onLocation(c, typed.lat, typed.lon, true);
@@ -134,6 +142,22 @@ async function onList(c: LineCtx): Promise<void> {
   const u = (await db.query<{ held_month: string | null; held_reason: HeldReason | null; sent: number }>('SELECT u.held_month AS held_month, u.held_reason AS held_reason, COALESCE((SELECT x.sent FROM line_user_usage x WHERE x.user_id = u.user_id AND x.month = $2), 0) AS sent FROM line_user u WHERE u.user_id = $1', [c.user, month])).rows[0];
   const list = rows.map((r) => ({ id: r.id, key: r.key, label: r.label ?? 'จุดที่ติดตาม' }));
   await lineReply(c, lineListText(list, u?.sent ?? 0, u?.held_month === month ? u.held_reason : null), list.map((r) => pbAction(lineUnfollowButtonText(r.label), `lu:${r.id}`)));
+}
+
+/** ชื่อ/ตั้งชื่อ <n> <name> (owner-approved follow-up): `<n>` is 1-based, in the same order รายการ
+ *  shows (follow id order) — approved people with follows only, allowed while paused/LINE_OFF. */
+async function onRename(c: LineCtx, n: number, raw: string): Promise<void> {
+  const db = c.env.db;
+  const u = (await db.query<{ state: LineState; target_id: number | null }>('SELECT state, target_id FROM line_user WHERE user_id = $1', [c.user])).rows[0];
+  if (!u || u.state !== 'approved' || u.target_id === null) return lineReply(c, LINE_NOT_APPROVED_FOLLOW_TH);
+  const rows = (await db.query<{ id: number }>('SELECT f.id AS id FROM follow f JOIN target t ON t.id = f.target_id WHERE t.line_user = $1 ORDER BY f.id', [c.user])).rows;
+  if (!rows.length) return lineReply(c, LINE_NO_FOLLOWS_TH, [LOCATION_ACTION]);
+  const target = n >= 1 ? rows[n - 1] : undefined;
+  if (!target) return lineReply(c, NOT_FOUND_TH);
+  const label = tgName(raw);
+  if (!label) return lineReply(c, LINE_RENAME_HOWTO_TH);
+  await db.query('UPDATE follow SET label = $1 WHERE id = $2', [label, target.id]);
+  await lineReply(c, lineRenamedText(n, label));
 }
 
 async function onPostback(c: LineCtx, data: string): Promise<void> {

@@ -69,15 +69,13 @@ async function notice(d: AlertDeps, line: LineRun, now: Date, kind: LineNoticeKi
   await (d.tgSend ?? tgSender(token, d.fetch))(chat, text);
 }
 
-/** A fresh 429 (controller ruling 3): sent straight away, bypassing `noticeOnce` — a 'low' notice
- *  already sent today must not suppress it. The caller only reaches this once per month
- *  (`LineRepo.exhausted` returns true only the first time a month flips to exhausted). */
-async function noticeExhausted(d: AlertDeps, line: LineRun): Promise<void> {
-  const token = d.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return;
-  const chat = await line.repo.adminChat();
-  if (chat === null) return;
-  await (d.tgSend ?? tgSender(token, d.fetch))(chat, LINE_EXHAUSTED_ADMIN_TH);
+/** A 429 (Change B): at most once per Bangkok day via `noticeOnce`'s own 'exhausted' column — a
+ *  'low' notice already sent today (a different column) must not suppress it. `exhausted` can flip
+ *  true→false→true within a day as LINE's own consumption figure lags (`saveLineCheck` clears it
+ *  early, the next push gets 429 again), so the month-flip in `LineRepo.exhausted` alone is not
+ *  enough — the caller only reaches this when that also returned true. */
+async function noticeExhausted(d: AlertDeps, line: LineRun, now: Date): Promise<void> {
+  await notice(d, line, now, 'exhausted', LINE_EXHAUSTED_ADMIN_TH);
 }
 
 /** LINE alerts of one run (spec §5.3, §6): one push per person (≤2 messages = 1 message of quota,
@@ -133,9 +131,9 @@ export async function sendLine(d: AlertDeps, line: LineRun, items: Planned[], ge
     } else if (status === 429) {
       stop = 'quota';
       c.line_deferred += g.length;
-      // Controller ruling 3: bypass noticeOnce entirely — at most once per month via `exhausted`'s
-      // own "true only the first time" semantics, no new column.
-      if (await line.repo.exhausted(month)) await noticeExhausted(d, line);
+      // Change B: exhausted(month) (the month-flip) AND noticeOnce (the day gate) — either alone
+      // could repeat the admin notice within the same day once LINE's own figure clears `exhausted`.
+      if (await line.repo.exhausted(month)) await noticeExhausted(d, line, now);
     } else if (status === 401 || status === 403) {
       stop = 'auth';
       c.line_deferred += g.length;

@@ -1,5 +1,5 @@
 import { NO_OFFICIAL_ORDER } from './advice';
-import { ALERT, LINE } from './alert-config';
+import { ALERT, CAPS, LINE } from './alert-config';
 import { LEVEL_TH } from './labels';
 import { cleanText } from './text';
 import { NOT_A_REPORT_TH } from './tg-text';
@@ -16,6 +16,12 @@ export type HeldReason = 'user' | 'system' | 'exhausted';
 
 /** Typed commands: the whole message, trimmed (spec §4.1). */
 export const LINE_CMD = { request: 'ขอรับแจ้งเตือน', list: 'รายการ', stop: 'เลิก', help: 'วิธีใช้' } as const;
+/** Telegram-style aliases (owner-approved follow-up): case-insensitive, optional trailing
+ *  text/whitespace ignored — like the Telegram bot's own `/cmd` regex. */
+export const LINE_ALIAS = { list: /^\/list(?:\s.*)?$/i, help: /^\/help(?:\s.*)?$/i, stop: /^\/stop(?:\s.*)?$/i } as const;
+/** `ชื่อ <n> <name>` / `ตั้งชื่อ <n> <name>` (owner-approved follow-up): `<n>` is the point's number
+ *  as shown by `รายการ` (1-based, follow id order); `<name>` is cleaned like Telegram's `tgName`. */
+export const LINE_RENAME_RE = /^(?:ตั้งชื่อ|ชื่อ)\s+(\d{1,2})\s+([\s\S]+)$/;
 /** LINE postback data — strict shapes, like Telegram's CB. */
 export const LPB = {
   follow: /^lf:(\d{1,2}\.\d{3},\d{2,3}\.\d{3})$/,
@@ -42,6 +48,12 @@ export const LINE_OTHER_TH = [
   `พิมพ์ "${LINE_CMD.help}" · ${NOT_A_REPORT_TH}`,
 ].join('\n');
 
+/** How to rename a point (also the reply when a typed name is empty or too long) and how to move
+ *  one (owner-approved follow-up: renaming and the ability to move by re-following elsewhere). */
+export const LINE_RENAME_HOWTO_TH = `พิมพ์ ชื่อ 1 บ้านยาย (ไม่เกิน ${CAPS.tgLabelMax} ตัวอักษร)`;
+export const LINE_MOVE_TH = 'ย้ายจุด: กด เลิก จุดนั้นในรายการ แล้วส่งตำแหน่งใหม่ และกด ติดตามจุดนี้';
+export const lineRenamedText = (n: number, label: string): string => `ตั้งชื่อจุดที่ ${n} เป็น '${label}' แล้ว`;
+
 export function lineWelcomeText(siteUrl: string): string {
   return [
     'ส่งตำแหน่งมาเพื่อดูระดับความเสี่ยงน้ำท่วมของจุดนั้นได้ทันที',
@@ -60,7 +72,7 @@ export const LINE_REQUEST_LIMIT_TH = 'ขอสิทธิ์ได้วัน
 export const LINE_REQUESTS_CLOSED_TH = 'ปิดรับคำขอชั่วคราว — ใช้ Web Push หรือ Telegram บนเว็บแทน';
 export const lineApprovedText = (): string =>
   [`ได้รับสิทธิ์รับแจ้งเตือนทาง LINE แล้ว — ส่งตำแหน่งแล้วแตะ "ติดตามจุดนี้" (ได้ไม่เกิน ${LINE.placesPerUser} จุด)`, LINE_LIMIT_NOTE_TH, NO_OFFICIAL_ORDER].join('\n');
-export const lineFollowedText = (label: string): string => `ติดตาม '${label}' แล้ว\n${LINE_LIMIT_NOTE_TH}`;
+export const lineFollowedText = (label: string): string => `ติดตาม '${label}' แล้ว\n${LINE_LIMIT_NOTE_TH}\n${LINE_RENAME_HOWTO_TH}`;
 export const LINE_NOT_APPROVED_FOLLOW_TH = `ติดตามจุดได้เฉพาะผู้ที่แอดมินอนุมัติแล้ว — พิมพ์ "${LINE_CMD.request}" เพื่อขอสิทธิ์ (ส่งตำแหน่งดูระดับได้เสมอ)`;
 export const LINE_MAX_FOLLOWS_TH = `ติดตามครบ ${LINE.placesPerUser} จุดแล้ว — พิมพ์ "${LINE_CMD.list}" เพื่อเลิกบางจุด`;
 export const LINE_NO_FOLLOWS_TH = 'ยังไม่ได้ติดตามจุดใด — ส่งตำแหน่งมาได้เลย';
@@ -81,7 +93,7 @@ const HELD_LIST: Record<HeldReason, string> = {
 };
 
 export function lineListText(rows: readonly { label: string; key: string }[], sent: number, held: HeldReason | null): string {
-  const lines = ['จุดที่ติดตาม:', ...rows.map((r, i) => `${i + 1}. ${r.label} (${r.key.replace(',', ', ')})`), `LINE แจ้งเตือนคุณเดือนนี้ ${sent}/${LINE.perUserMonth} ครั้ง`];
+  const lines = ['จุดที่ติดตาม:', ...rows.map((r, i) => `${i + 1}. ${r.label} (${r.key.replace(',', ', ')})`), `LINE แจ้งเตือนคุณเดือนนี้ ${sent}/${LINE.perUserMonth} ครั้ง`, LINE_MOVE_TH];
   if (held !== null) lines.push(HELD_LIST[held]);
   return lines.join('\n');
 }
@@ -94,6 +106,8 @@ export function lineHelpText(siteUrl: string): string {
     `แจ้งเตือนเมื่อจุดที่ติดตามถึงระดับ "${LEVEL_TH[ALERT.level as Level]}" ขึ้นไป และเมื่อต่ำกว่านั้นต่อเนื่อง 1 ชม. · ${LINE_LIMIT_NOTE_TH}`,
     'ข้อมูลหาย = บอทเงียบ ไม่ได้แปลว่าปลอดภัย',
     `พิมพ์ "${LINE_CMD.request}" ขอสิทธิ์ · "${LINE_CMD.list}" จุดที่ติดตาม · "${LINE_CMD.stop}" ลบทั้งหมด`,
+    LINE_RENAME_HOWTO_TH,
+    LINE_MOVE_TH,
     `${LINE_PRIVACY_TH} (สำเนาสำรองลบภายใน 14 วัน)`,
     NOT_A_REPORT_TH,
     `ดูบนเว็บ: ${siteUrl}`,

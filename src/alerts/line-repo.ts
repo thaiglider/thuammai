@@ -14,7 +14,7 @@ export interface LinePendingRow {
   heldMonth: string | null; heldReason: HeldReason | null;
 }
 
-export type LineNoticeKind = 'held' | 'low' | 'auth';
+export type LineNoticeKind = 'held' | 'low' | 'auth' | 'exhausted';
 /** One successful push: the follows' new state + the counters, in one transaction (spec §6 rule 4). */
 /** `counted`: the push held at least one non-level-4 message, so it counts against the person's 10
  *  (spec §6: "ไม่รวมระดับ 4"); the month total always counts. */
