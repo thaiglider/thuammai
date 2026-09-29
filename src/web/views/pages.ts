@@ -2,13 +2,14 @@ import { AREA_NOTE_TH, DISCLAIMER_TH, EMERGENCY, LEVEL_COLOR, LEVEL_TH } from '.
 import { SIGNAL_SETS, TRUTHS, type SkillFile } from '../../core/skill';
 import { BKK_METRO, DAM, FRESH_MIN, THRESHOLDS_VERSION } from '../../core/thresholds';
 import { fmtDateTime } from '../../core/time';
+import { ALERTS_PRIVACY_TH, alertsCfg, alertsOn, pushConfigured } from '../lib/alerts-state';
 import type { AreaRow } from '../lib/data';
 import { clear, h } from '../lib/dom';
 import { freshness, staleLine } from '../lib/freshness';
 import { normalizeThai } from '../lib/search';
 import { applySettings, saveSettings, type Settings } from '../lib/settings';
 import { hitText, LEVEL_KEY_TH, precText, SIGNAL_TH, SKILL_NONE_TH, SKILL_NOTE_TH, staleText, targetText, TRACK_TH, trackState, TRUTH_TH, windowText } from '../lib/skill-text';
-import type { AppCtx } from './home';
+import { loadPlaces, type AppCtx } from './home';
 import { tabLink, type Tab } from './shell';
 
 const SOURCE_TH: Record<string, string> = {
@@ -162,6 +163,11 @@ function about(ctx: AppCtx, main: HTMLElement): void {
   const themeLight = h('button', { onclick: () => set({ theme: 'light' }), 'aria-pressed': String(s.theme === 'light') }, 'สว่าง');
   const themeDark = h('button', { onclick: () => set({ theme: 'dark' }), 'aria-pressed': String(s.theme === 'dark') }, 'มืด');
   themeBtns.push({ el: themeAuto, val: 'auto' }, { el: themeLight, val: 'light' }, { el: themeDark, val: 'dark' });
+  // Also when alerts are off in this build but this phone still says on: it shows the paused state (I3).
+  const alertsMenu = pushConfigured(alertsCfg()) || alertsOn(ctx.kv) ? h('section', { 'data-testid': 'alerts-menu' }) : null;
+  if (alertsMenu) {
+    void import('./alerts').then((m) => m.renderAlertsMenu(alertsMenu, { kv: ctx.kv, base: ctx.base, shell: ctx.shell, getPlaces: () => loadPlaces(ctx.kv) })).catch(() => alertsMenu.remove());
+  }
   main.append(
     h('h1', {}, 'เมนู'),
     h('nav', { 'aria-label': 'เมนู', 'data-testid': 'menu' },
@@ -173,9 +179,11 @@ function about(ctx: AppCtx, main: HTMLElement): void {
       h('div', { class: 'actions', role: 'group', 'aria-label': 'ขนาดตัวอักษร' }, sizeA, sizeA2, sizeA3),
       h('div', { class: 'actions', role: 'group', 'aria-label': 'ธีม' }, themeAuto, themeLight, themeDark),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.saveData, onchange: (e: Event) => set({ saveData: (e.target as HTMLInputElement).checked }) }), ' โหมดประหยัดเน็ต (ไม่โหลดแผนที่เอง)')),
+    ...(alertsMenu ? [alertsMenu] : []),
     h('section', { 'data-testid': 'about' },
       h('h2', {}, 'เกี่ยวกับ'),
       h('p', {}, 'ท่วมไหม ทำโดยอาสาสมัคร ไม่ใช่หน่วยงานทางการ ใช้เพื่อประเมินสถานการณ์และเตรียมพร้อม — ทำตามประกาศของหน่วยงานเสมอ'),
+      h('p', {}, ALERTS_PRIVACY_TH),
       h('p', {}, h('a', { href: 'https://github.com/thaiglider/thuammai', rel: 'noopener' }, 'โค้ดของเว็บ (GitHub)')),
       h('h2', {}, 'เครดิตและสัญญาอนุญาต'),
       h('ul', {},

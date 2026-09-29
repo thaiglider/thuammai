@@ -4,6 +4,7 @@ import { fmtTime } from '../../core/time';
 import type { Level } from '../../core/types';
 import { NO_OFFICIAL_ORDER } from '../../core/advice';
 import { distKm, inThailand } from '../../core/geo';
+import { alertsCfg, alertsMode, alertsOn, alertsPausedByBuild, browserPushGlobals, GPS_CONFIRM_ALERTS_TH, GPS_CONFIRM_TH } from '../lib/alerts-state';
 import type { AreaRow, DataStore, Meta } from '../lib/data';
 import { clear, h } from '../lib/dom';
 import type { Env } from '../lib/env';
@@ -52,6 +53,11 @@ export function currentPlaces(ctx: AppCtx): Place[] {
   return ctx.kv.persistent ? loadPlaces(ctx.kv) : decodePlacesFromHash(location.hash);
 }
 
+/** What the lazy alerts view needs from the page. */
+function alertsCtx(ctx: AppCtx) {
+  return { kv: ctx.kv, base: ctx.base, shell: ctx.shell, getPlaces: () => loadPlaces(ctx.kv) };
+}
+
 function savePlaces(ctx: AppCtx, places: Place[]): void {
   setJson(ctx.kv, 'places', places);
   const hash = places.length ? `#p=${encodePlaces(places)}` : '';
@@ -59,6 +65,8 @@ function savePlaces(ctx: AppCtx, places: Place[]): void {
   // Without persistent storage (e.g. LINE's in-app browser) the place list lives only in the
   // hash, so every nav link must carry it forward or switching tabs would lose it.
   refreshNavHashes(ctx.shell);
+  // Alerts on: push the new set to the Worker (debounced; names only go to the SW cache).
+  if (alertsOn(ctx.kv)) void import('./alerts').then((m) => m.onPlacesSaved(alertsCtx(ctx))).catch(() => undefined);
 }
 
 /** The naming prompt used by every way of adding a place (search, link, GPS, map pin). */
@@ -105,7 +113,7 @@ function announceRise(ctx: AppCtx): void {
     h('span', {}, 'ระดับความเสี่ยงของจุดที่คุณติดตามสูงขึ้น — ดูรายละเอียดด้านล่าง'),
     h('button', { onclick: () => banner.remove() }, 'ปิด'));
   ctx.shell.banners.prepend(banner);
-  if (ctx.env.canNotify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+  if (!alertsOn(ctx.kv) && ctx.env.canNotify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     try { new Notification('ท่วมไหม', { body: 'ระดับความเสี่ยงของจุดที่คุณติดตามสูงขึ้น', icon: './icon-192.png' }); } catch { /* ignore */ }
   }
 }
@@ -239,6 +247,16 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
   cards.append(h('div', { class: 'actions' },
     h('button', { 'data-testid': 'share-all', onclick: () => void doShare(ctx, places, shareAllText(withShown, oldestAt(ctx.meta.generatedAt, withShown.map((w) => w.olderAt)))) }, 'ส่งจุดทั้งหมดให้ครอบครัว'),
     h('button', { onclick: () => { qrMsg.textContent = ''; openQr(shareUrl(ctx.base, places)).catch(() => { qrMsg.textContent = 'เปิด QR ไม่ได้ขณะออฟไลน์ — ลองใหม่เมื่อต่อเน็ต'; }); } }, 'QR code')), qrMsg);
+
+  // I3: "on" here but nothing can arrive (alerts switched off in this build, or no SW) → paused.
+  const mode = alertsPausedByBuild(alertsCfg(), ctx.env, ctx.kv) ? 'paused' : alertsMode(alertsCfg(), ctx.env, ctx.kv, browserPushGlobals(), places.length);
+  if (mode) {
+    const host = h('section', { class: 'card', 'data-testid': 'alerts' });
+    content.append(host);
+    void import('./alerts')
+      .then((m) => { if (gen === contentGen) m.mountAlerts(host, alertsCtx(ctx), mode); })
+      .catch(() => host.remove());
+  }
 }
 
 async function provinceNameAt(ctx: AppCtx, lat: number, lon: number): Promise<string> {
@@ -328,14 +346,16 @@ function renderAddPanel(ctx: AppCtx, add: (p: Place) => 'added' | 'dup' | 'full'
     }
   } }, 'ค้นหาสถานที่ (OpenStreetMap)');
   const gps = ctx.env.canGeolocate ? h('button', { 'data-testid': 'gps', onclick: () => {
-    if (!confirm('ใช้ตำแหน่งปัจจุบันเพื่อหาความเสี่ยงของจุดนี้เท่านั้น ตำแหน่งไม่ถูกส่งออกจากเครื่อง — ดำเนินการต่อ?')) return;
+    if (!confirm(alertsOn(ctx.kv) ? GPS_CONFIRM_ALERTS_TH : GPS_CONFIRM_TH)) return;
     msg.textContent = 'กำลังหาตำแหน่ง…';
     navigator.geolocation.getCurrentPosition(
       (pos) => { msg.textContent = ''; choose('ตำแหน่งปัจจุบัน', Math.round(pos.coords.latitude * 1e4) / 1e4, Math.round(pos.coords.longitude * 1e4) / 1e4); },
       () => { msg.textContent = 'หาตำแหน่งไม่ได้ — ค้นหาชื่อตำบลหรือวางลิงก์แผนที่แทน'; input.focus(); },
       { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 });
   } }, 'ใช้ตำแหน่งปัจจุบัน') : null;
-  const notify = ctx.env.canNotify && typeof Notification !== 'undefined' && Notification.permission === 'default'
+  // The old "only while this page is open" button stays only where Web Push is impossible (spec §6.1).
+  const pushCapable = alertsMode(alertsCfg(), ctx.env, ctx.kv, browserPushGlobals(), 1) !== null;
+  const notify = !pushCapable && ctx.env.canNotify && typeof Notification !== 'undefined' && Notification.permission === 'default'
     ? h('button', { onclick: async () => { await Notification.requestPermission(); } }, 'เตือนด้วยการแจ้งเตือนของเครื่อง (เฉพาะตอนเปิดหน้านี้ไว้)')
     : null;
   return h('section', { class: 'card' },

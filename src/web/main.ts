@@ -1,11 +1,12 @@
 import './styles.css';
 import { clear, h } from './lib/dom';
 import { browserEnvGlobals, detectEnv } from './lib/env';
+import { alertsOn } from './lib/alerts-state';
 import { DataStore, fetchLoader, SchemaMismatchError, type Meta } from './lib/data';
 import { effectiveNow, freshness } from './lib/freshness';
 import { applySettings, loadSettings } from './lib/settings';
 import { browserStorage } from './lib/storage';
-import { loadErrorBanner, renderHome, renderPlacesWithoutData, warmCache, type AppCtx } from './views/home';
+import { loadErrorBanner, loadPlaces, renderHome, renderPlacesWithoutData, warmCache, type AppCtx } from './views/home';
 import { renderMapTab } from './views/map';
 import { renderPage } from './views/pages';
 import { renderShell, type Tab } from './views/shell';
@@ -114,6 +115,8 @@ async function boot(): Promise<void> {
   window.addEventListener('online', () => void render());
   window.addEventListener('offline', () => void render());
   await render();
+  // Alerts on: check the browser subscription and retry pending syncs (spec §6.2).
+  if (alertsOn(kv)) void import('./views/alerts').then((m) => m.onOpen({ kv, base, shell, getPlaces: () => loadPlaces(kv) })).catch(() => undefined);
 }
 
 void boot();

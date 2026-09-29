@@ -1,7 +1,8 @@
-import { provincesNear } from '../../core/geo';
-import type { RiskInput, ZeroRain } from '../../core/risk';
+import { buildPointInput, pointProvinces, type EventsFile, type ForecastFile, type PointInput, type ProvObsFile } from '../../core/point-input';
 import { isSkillFile, type SkillFile } from '../../core/skill';
-import type { FloodEvent, ForecastPoint, Level, Observation, ProvinceGeo, Rain0, SourceHealth, TmdWarning } from '../../core/types';
+import type { FloodEvent, Level, Observation, ProvinceGeo, SourceHealth, TmdWarning } from '../../core/types';
+
+export { snapshotMismatch } from '../../core/point-input';
 
 export const SUPPORTED_SCHEMA = 1;
 export class SchemaMismatchError extends Error {}
@@ -19,16 +20,6 @@ export function fetchLoader(base: string, fetchImpl: typeof fetch = fetch.bind(g
     if (!res.ok) throw new Error(`HTTP ${res.status} ${path}`);
     return { data: (await res.json()) as T, date: res.headers.get('date') };
   };
-}
-
-/** When files came from a different snapshot than meta.json — e.g. the service worker answered an
- *  obs request from its cache after a network timeout — return the oldest generatedAt involved
- *  (meta's own included); null when everything matches or meta is not known yet. */
-export function snapshotMismatch(metaAt: string | null, fileAts: readonly (string | undefined)[]): string | null {
-  if (!metaAt) return null;
-  const all = [metaAt, ...fileAts.filter((a): a is string => typeof a === 'string')];
-  if (all.every((a) => a === metaAt)) return null;
-  return all.reduce((min, a) => (Date.parse(a) < Date.parse(min) ? a : min));
 }
 
 export class DataStore {
@@ -100,34 +91,17 @@ export class DataStore {
     }
   }
 
-  async inputFor(lat: number, lon: number, now: Date): Promise<RiskInput & { reportWindowH: number; olderSnapshotAt: string | null }> {
+  async inputFor(lat: number, lon: number, now: Date): Promise<PointInput> {
     // A missing provinces file must not reject the whole card: with no provinces the input is
     // marked incomplete, which yields the safe level-0 "ข้อมูลไม่ครบ" display for the place.
-    const all = await this.provinces().catch(() => null);
-    const provs = all ? provincesNear(lat, lon, all, 10) : [];
+    const provs = pointProvinces(lat, lon, await this.provinces().catch(() => null));
     const [obsResults, events, forecast] = await Promise.all([
-      Promise.allSettled(provs.map((p) => this.get<{ generatedAt: string; obs: Observation[]; rain0: Rain0[] }>(`data/obs/${p}.json`).then((r) => ({ p, ...r.data })))),
-      this.get<{ generatedAt: string; events: FloodEvent[]; windowH: number }>('data/events.json').then((r) => r.data).catch(() => null),
-      this.get<{ generatedAt: string; points: ForecastPoint[] }>('data/forecast.json').then((r) => r.data).catch(() => null),
+      Promise.allSettled(provs.map((p) => this.get<ProvObsFile>(`data/obs/${p}.json`).then((r) => r.data))),
+      this.get<EventsFile>('data/events.json').then((r) => r.data).catch(() => null),
+      this.get<ForecastFile>('data/forecast.json').then((r) => r.data).catch(() => null),
     ]);
-    const obs: Observation[] = [];
-    const rain0: ZeroRain[] = [];
-    const ats: string[] = [];
-    let incomplete = !events || !forecast || provs.length === 0;
-    if (events) ats.push(events.generatedAt);
-    if (forecast) ats.push(forecast.generatedAt);
-    for (const r of obsResults) {
-      if (r.status === 'rejected') { incomplete = true; continue; }
-      ats.push(r.value.generatedAt);
-      obs.push(...r.value.obs);
-      for (const [a, b] of r.value.rain0) rain0.push({ lat: a, lon: b, prov: r.value.p });
-    }
-    // Mixing snapshots silently could show "no signal" from stale files: mark incomplete (so the
-    // level can never be 1) and report the oldest time so the card is greyed with it.
-    const olderSnapshotAt = snapshotMismatch(this.gen, ats);
-    return {
-      obs, rain0, now, incomplete: incomplete || olderSnapshotAt !== null, olderSnapshotAt,
-      events: events?.events ?? [], forecast: forecast?.points ?? [], reportWindowH: events?.windowH ?? 0,
-    };
+    // Mixing snapshots silently could show "no signal" from stale files: buildPointInput marks the
+    // input incomplete (so the level can never be 1) and reports the oldest time for the grey card.
+    return buildPointInput({ provs, obs: obsResults.map((r) => (r.status === 'fulfilled' ? r.value : null)), events, forecast }, now, this.gen);
   }
 }

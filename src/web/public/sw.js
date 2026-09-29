@@ -10,11 +10,16 @@
  * - cross-origin requests are never intercepted: basemap style, sprites, glyphs and tiles from
  *   tiles.openfreemap.org (and Nominatim) go straight to the network with their own HTTP caching.
  *   We deliberately do not cache map tiles — the set is unbounded — so the map needs a connection;
- *   offline, the map tab shows the text list of flagged stations instead. */
+ *   offline, the map tab shows the text list of flagged stations instead.
+ * - push / notificationclick / pushsubscriptionchange: Web Push alerts (spec §6.3–6.4). The payload
+ *   has no place name; the page keeps names in the alert-places-v1 cache for this worker. */
 const BUILD = 'dev'; // @build
 const PRECACHE = []; // @precache
 const SHELL = `shell-${BUILD}`;
 const DATA = 'data-v1';
+const ALERTS_ORIGIN = ''; // @alerts
+const ALERT_PLACES = 'alert-places-v1';
+const KEEP = new Set([SHELL, DATA, ALERT_PLACES]);
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -31,7 +36,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    for (const key of await caches.keys()) if (key !== SHELL && key !== DATA) await caches.delete(key);
+    for (const key of await caches.keys()) if (!KEEP.has(key)) await caches.delete(key);
     await self.clients.claim();
   })());
 });
@@ -102,4 +107,71 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate' || path.startsWith('data/') || path.startsWith('p/')) {
     event.respondWith(networkFirst(request, request.mode === 'navigate' && (path === '' || path === 'index.html')));
   } else event.respondWith(staleWhileRevalidate(event));
+});
+
+async function alertNames() {
+  try {
+    const cache = await caches.open(ALERT_PLACES);
+    const res = await cache.match(new URL('./__alert-places.json', self.registration.scope).href);
+    if (!res) return null;
+    const j = await res.json();
+    return j && j.v === 1 && j.names && typeof j.names === 'object' ? j.names : null;
+  } catch {
+    return null;
+  }
+}
+
+function placeLabel(names, key) {
+  const list = names && Array.isArray(names[key]) ? names[key].filter((n) => typeof n === 'string' && n) : [];
+  if (list.length === 0) return 'จุดที่คุณติดตาม';
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]}, ${list[1]}`;
+  return `${list[0]} และอีก ${list.length - 1} จุด`;
+}
+
+// userVisibleOnly: every push must show a notification, even one we cannot read.
+async function showAlert(data) {
+  let p = null;
+  try { p = data ? data.json() : null; } catch { /* not JSON */ }
+  const ok = p && p.v === 1 && (p.t === 'alert' || p.t === 'clear') && typeof p.k === 'string' && typeof p.title === 'string' && typeof p.body === 'string';
+  if (!ok) {
+    return self.registration.showNotification('ท่วมไหม', { body: 'มีการเปลี่ยนแปลงที่จุดที่คุณติดตาม — แตะเพื่อดู', icon: './icon-192.png', data: { url: './' } });
+  }
+  const name = placeLabel(await alertNames(), p.k);
+  return self.registration.showNotification(`${name}: ${p.title}`, {
+    body: p.body, tag: p.k, renotify: p.t === 'alert', requireInteraction: p.l === 4, icon: './icon-192.png', data: { url: './' },
+  });
+}
+
+self.addEventListener('push', (event) => event.waitUntil(showAlert(event.data)));
+
+// Open the app itself (not ?lat=&lon=, which would offer to add the place again).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const scope = self.registration.scope;
+    const open = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).find((c) => c.url.startsWith(scope));
+    if (open) return open.focus();
+    return self.clients.openWindow('./');
+  })());
+});
+
+// The push service rotated the subscription: re-register it with the saved keys (points only).
+// Without saved keys, the page fixes it on the next visit.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    const sub = event.newSubscription;
+    if (!ALERTS_ORIGIN || !sub) return;
+    const names = await alertNames();
+    const places = Object.keys(names || {})
+      .map((k) => k.split(',').map(Number))
+      .filter((a) => a.length === 2 && a.every(Number.isFinite))
+      .slice(0, 10)
+      .map(([lat, lon]) => ({ lat, lon }));
+    if (!places.length) return;
+    const j = sub.toJSON();
+    try {
+      await fetch(`${ALERTS_ORIGIN}/v1/push/subscription`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: j.endpoint, keys: j.keys, places }) });
+    } catch { /* offline: the page re-syncs on the next visit */ }
+  })());
 });

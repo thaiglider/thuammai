@@ -9,22 +9,28 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:e2e": "vite build --mode e2e",
     "preview": "vite preview --port 4173 --strictPort",
     "e2e": "playwright test",
-    "site:fixtures": "npm run build && npm run pipeline:fixtures",
+    "site:fixtures": "npm run build:e2e && npm run pipeline:fixtures",
     "budget": "node tools/check-budget.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "pipeline": "tsx src/pipeline/main.ts",
     "pipeline:fixtures": "tsx src/pipeline/main.ts --fixtures tests/fixtures/snapshot-2026-09-28T1443 --now 2026-09-28T14:43:00+07:00 --out dist --state .cache/fixture-state.json --fresh-state",
-    "evaluate": "tsx src/pipeline/evaluate.ts"
+    "evaluate": "tsx src/pipeline/evaluate.ts",
+    "alerts": "tsx src/alerts/main.ts",
+    "worker:test": "vitest run tests/worker",
+    "worker:check": "node worker/make-config.mjs --local && npx wrangler@4.143.0 deploy --dry-run --outdir .cache/worker -c worker/wrangler.jsonc",
+    "worker:migrate:local": "node worker/make-config.mjs --local && npx wrangler@4.143.0 d1 migrations apply thuammai-alerts --local -c worker/wrangler.jsonc"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.19.0",
+    "@types/web-push": "^3.6.4",
     "eslint": "^10.11.0",
     "maplibre-gl": "^6.11.2",
     "qrcode-generator": "^2.0.4",
@@ -33,5 +39,8 @@
     "typescript-eslint": "^8.70.1",
     "vite": "^8.3.1",
     "vitest": "^5.0.2"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
   }
 }

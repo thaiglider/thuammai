@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { alertsOriginForBuild, cspWithAlerts, swWithAlerts } from './src/build/csp.ts';
 import { precacheAssets, type ViteManifest } from './src/build/precache.ts';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 
-function copyStatic(): Plugin {
+function copyStatic(alertsOrigin: string): Plugin {
   return {
     name: 'thuammai-copy-static-and-sw',
     apply: 'build',
@@ -19,7 +20,7 @@ function copyStatic(): Plugin {
       const lic = resolve(ROOT, 'dist/licenses');
       mkdirSync(lic, { recursive: true });
       copyFileSync(resolve(ROOT, 'node_modules/maplibre-gl/LICENSE.txt'), resolve(lic, 'maplibre-gl.txt'));
-      writeServiceWorker(resolve(ROOT, 'dist'));
+      writeServiceWorker(resolve(ROOT, 'dist'), alertsOrigin);
     },
   };
 }
@@ -29,7 +30,7 @@ function copyStatic(): Plugin {
  *  manifest (see src/build/precache.ts). The build id hashes the contents of every precached
  *  file, so any change to the shell gives the worker a new cache name. The gazetteer (~440 KB) is
  *  deliberately not precached: it is cached on first use of the search box. */
-function writeServiceWorker(dist: string): void {
+function writeServiceWorker(dist: string, alertsOrigin: string): void {
   const manifest = JSON.parse(readFileSync(resolve(dist, '.vite/manifest.json'), 'utf8')) as ViteManifest;
   const all = readdirSync(resolve(dist, 'assets')).sort().map((f) => `assets/${f}`);
   // Only what the first page needs (entry JS/CSS and fonts). Lazy chunks — the map (MapLibre and
@@ -47,14 +48,31 @@ function writeServiceWorker(dist: string): void {
     .replace(/^const BUILD = .*; \/\/ @build$/m, `const BUILD = '${hash.digest('hex').slice(0, 12)}';`)
     .replace(/^const PRECACHE = .*; \/\/ @precache$/m, `const PRECACHE = ${JSON.stringify(precache)};`);
   if (out.includes('@build') || out.includes('@precache')) throw new Error('sw.js placeholders not found');
-  writeFileSync(swPath, out);
+  writeFileSync(swPath, swWithAlerts(out, alertsOrigin));
 }
 
-export default defineConfig({
-  root: 'src/web',
-  base: './',
-  publicDir: 'public',
-  build: { outDir: '../../dist', emptyOutDir: true, target: 'es2022', sourcemap: false, manifest: true },
-  preview: { port: 4173, strictPort: true },
-  plugins: [copyStatic()],
+/** Adds the alerts Worker to the page CSP when VITE_ALERTS_ORIGIN is set (spec §6.6). */
+function alertsCsp(origin: string): Plugin {
+  return { name: 'thuammai-alerts-csp', transformIndexHtml: (html) => cspWithAlerts(html, origin || undefined) };
+}
+
+export default defineConfig(({ mode }) => {
+  // The e2e settings (test origin, dummy key) live with the tests, outside the published src/ (m9).
+  const envDir = resolve(ROOT, mode === 'e2e' ? 'tests/e2e' : 'src/web');
+  const raw = loadEnv(mode, envDir, 'VITE_').VITE_ALERTS_ORIGIN;
+  const { origin: alertsOrigin, warning } = alertsOriginForBuild(raw);
+  if (warning) console.warn(`
+[thuammai] WARNING: ${warning}
+`);
+  return {
+    root: 'src/web',
+    base: './',
+    envDir,
+    // An invalid origin is blanked for the page too, so the client sees alerts off.
+    define: warning ? { 'import.meta.env.VITE_ALERTS_ORIGIN': JSON.stringify('') } : {},
+    publicDir: 'public',
+    build: { outDir: '../../dist', emptyOutDir: true, target: 'es2022', sourcemap: false, manifest: true },
+    preview: { port: 4173, strictPort: true },
+    plugins: [copyStatic(alertsOrigin), alertsCsp(alertsOrigin)],
+  };
 });

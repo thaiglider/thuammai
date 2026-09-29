@@ -1,0 +1,59 @@
+import { ALERTS_ORIGIN_RE } from '../../core/alert-config';
+import { alertKey } from '../../core/alert-key';
+import type { Env } from './env';
+import type { Place } from './places';
+import { getJson, setJson, type KV } from './storage';
+
+/* Static (first-render) part of the alerts feature: config, local state and the display rule.
+ * Everything that talks to the Worker or the push service is in the lazy alerts-client chunk. */
+
+export interface AlertsCfg { origin: string; vapid: string; tgBot: string }
+export function alertsCfg(): AlertsCfg {
+  return {
+    origin: import.meta.env.VITE_ALERTS_ORIGIN ?? '',
+    vapid: import.meta.env.VITE_VAPID_PUBLIC_KEY ?? '',
+    tgBot: import.meta.env.VITE_TELEGRAM_BOT ?? '',
+  };
+}
+/** A 65-byte P-256 public key is 87 base64url characters. */
+export const pushConfigured = (c: AlertsCfg): boolean => ALERTS_ORIGIN_RE.test(c.origin) && /^[A-Za-z0-9_-]{87}$/.test(c.vapid);
+
+/** `holdUntil`: no sync before this time (the Worker's per-day new-places cap, m4). */
+export interface AlertsKv { on: true; endpoint: string; syncedAt: string; placesHash: string; pending?: boolean; holdUntil?: string }
+const KEY = 'alerts';
+export function loadAlerts(kv: KV): AlertsKv | null {
+  const s = getJson<Partial<AlertsKv> | null>(kv, KEY, null);
+  return s && s.on === true && typeof s.endpoint === 'string' && typeof s.syncedAt === 'string' && typeof s.placesHash === 'string' ? (s as AlertsKv) : null;
+}
+export const saveAlerts = (kv: KV, s: AlertsKv): void => setJson(kv, KEY, s);
+export const clearAlerts = (kv: KV): void => kv.remove(KEY);
+export const alertsOn = (kv: KV): boolean => loadAlerts(kv) !== null;
+
+/** The server's view of a place list: the sorted set of ~100 m keys (renames do not change it). */
+export function placesHash(places: readonly Pick<Place, 'lat' | 'lon'>[]): string {
+  return [...new Set(places.map((p) => alertKey(p.lat, p.lon)))].sort().join('|');
+}
+
+export type AlertsMode = 'push' | 'ios-guide' | null;
+
+/** I3: this phone says alerts are on, but this build cannot deliver them (alerts switched off or
+ *  misconfigured on the server side) or the browser has no service worker. Never show "on" then. */
+export function alertsPausedByBuild(cfg: AlertsCfg, env: Pick<Env, 'canServiceWorker'>, kv: KV): boolean {
+  return alertsOn(kv) && (!pushConfigured(cfg) || !env.canServiceWorker);
+}
+export const ALERTS_PAUSED_TH = 'ระบบแจ้งเตือนหยุดชั่วคราว — ตอนนี้จะไม่ได้รับแจ้งเตือน เปิดเว็บดูเอง';
+export interface PushGlobals { hasPushManager: boolean; hasNotification: boolean }
+export function browserPushGlobals(): PushGlobals {
+  return { hasPushManager: typeof window !== 'undefined' && 'PushManager' in window, hasNotification: typeof Notification !== 'undefined' };
+}
+
+/** Which alerts UI this browser gets (spec §6.1); null hides the whole section. */
+export function alertsMode(cfg: AlertsCfg, env: Env, kv: KV, g: PushGlobals, placeCount: number): AlertsMode {
+  if (placeCount < 1 || env.isLine || !pushConfigured(cfg) || !kv.persistent || !env.canServiceWorker) return null;
+  if (env.isIOS && !env.standalone) return 'ios-guide';
+  return g.hasPushManager && g.hasNotification ? 'push' : null;
+}
+
+export const GPS_CONFIRM_TH = 'ใช้ตำแหน่งปัจจุบันเพื่อหาความเสี่ยงของจุดนี้เท่านั้น ตำแหน่งไม่ถูกส่งออกจากเครื่อง — ดำเนินการต่อ?';
+export const GPS_CONFIRM_ALERTS_TH = 'ใช้ตำแหน่งปัจจุบันเพื่อหาความเสี่ยงของจุดนี้เท่านั้น ตำแหน่งไม่ถูกส่งออกจากเครื่อง ยกเว้นพิกัดโดยประมาณ (~100 ม.) ที่ส่งให้ระบบแจ้งเตือนถ้าคุณบันทึกจุดนี้ — ดำเนินการต่อ?';
+export const ALERTS_PRIVACY_TH = 'ชื่อจุด จุดที่บันทึก และการตั้งค่าอยู่ในเครื่องของคุณเท่านั้น · ถ้าเปิดแจ้งเตือน ระบบแจ้งเตือน (Cloudflare) เก็บพิกัดโดยประมาณ (~100 ม.) ของจุดที่ติดตามและที่อยู่สำหรับส่งแจ้งเตือนของเบราว์เซอร์ ไม่เก็บชื่อจุดและ IP — ลบเมื่อเลิกรับแจ้งเตือน หรือเมื่อไม่ได้เปิดเว็บนาน 180 วัน';

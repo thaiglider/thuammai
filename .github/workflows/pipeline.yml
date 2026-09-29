@@ -47,7 +47,11 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: npm }
       - run: npm ci
+      # Public values only (never secrets): the Worker origin is baked in only while alerts are on.
       - run: npm run build
+        env:
+          VITE_ALERTS_ORIGIN: ${{ vars.ALERTS_ENABLED == '1' && vars.ALERTS_ORIGIN || '' }}
+          VITE_VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
       - uses: actions/cache/restore@v4
         with:
           path: .cache/state.json
@@ -68,6 +72,9 @@ jobs:
             echo "no archive release yet"
           fi
       - run: npm run pipeline -- --out dist --state .cache/state.json --site "$SITE_URL" --skill .cache/skill/skill.json
+      # The exact data/ this run deploys, for the alerts job (never the Pages cache).
+      - uses: actions/upload-artifact@v4
+        with: { name: snapshot, path: dist/data, retention-days: 1, if-no-files-found: error }
       - uses: actions/cache/save@v4
         if: always()
         with:
@@ -77,6 +84,33 @@ jobs:
         with: { path: dist }
       - id: deployment
         uses: actions/deploy-pages@v4
+  # The only job that can read the alert secrets (in its last step only). Slow or failing alerts
+  # never delay the 10-minute chain or the deploy: `next` does not wait for this job.
+  alerts:
+    needs: [gate, build]
+    if: ${{ needs.build.result == 'success' && vars.ALERTS_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: alerts
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with: { name: snapshot, path: .cache/snapshot }
+      - run: npm run alerts -- --data .cache/snapshot
+        env:
+          ALERTS_ORIGIN: ${{ vars.ALERTS_ORIGIN }}
+          ALERTS_API_TOKEN: ${{ secrets.ALERTS_API_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
   next:
     needs: [gate, build]
     if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}

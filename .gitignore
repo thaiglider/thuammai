@@ -6,3 +6,6 @@ dist/
 .superpowers/
 test-results/
 playwright-report/
+worker/wrangler.jsonc
+worker/.wrangler/
+.wrangler/
