@@ -1,0 +1,24 @@
+# thuammai — flood alerts API (compose project in @THUAMMAI_HOME@; spec phase 3A §4.1)
+@API_HOST@ {
+	import security_headers
+	# No access_log on purpose: the privacy text promises that IPs are not stored (R1).
+	request_body {
+		max_size 70KB
+	}
+	@api path /v1/*
+	handle @api {
+		# keepalive 60s (< the api server's own 65 s keep-alive timeout, F1 I2 / F2-C): the upstream
+		# must never close an idle connection before Caddy stops reusing it.
+		reverse_proxy thuammai-api:8080 {
+			transport http {
+				keepalive 60s
+			}
+		}
+	}
+	handle / {
+		redir https://thaiglider.github.io/thuammai/ 302
+	}
+	handle {
+		respond 404
+	}
+}

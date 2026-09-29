@@ -1,0 +1,30 @@
+# CI only (spec §13.3, R11): a stand-in for the owner's shared host — the /opt/stack caddy named
+# "caddy" on network ai-stack_ai-stack — plus fakes for Pages, Uptime Kuma, FCM and Telegram.
+# The fake Kuma answers as http://uptime-kuma:3001 on ai-stack_ai-stack, exactly the internal URL
+# that every push takes on the VPS (F2-K): no Kuma push goes through a host-published port.
+name: stack
+services:
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ${CI_DIR:?}/Caddyfile:/etc/caddy/Caddyfile
+    networks: [ai-stack]
+  fakes:
+    image: node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+    container_name: fakes
+    command: ["node", "/ci/fakes.mjs"]
+    volumes:
+      - ./fakes.mjs:/ci/fakes.mjs:ro
+      - ${CI_DATA:?}:/data:ro
+      - ${CI_DIR:?}/certs:/certs:ro
+    ports: ["127.0.0.1:8088:8088"]
+    networks:
+      fakes: { ipv4_address: 172.30.0.10 }
+      ai-stack: { aliases: [uptime-kuma] }
+networks:
+  ai-stack: { name: ai-stack_ai-stack }
+  fakes:
+    name: thuammai_ci_fakes
+    ipam: { config: [{ subnet: 172.30.0.0/24 }] }

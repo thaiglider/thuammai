@@ -1,92 +1,67 @@
+import { setImmediate as yieldNow } from 'node:timers/promises';
 import { ALERT } from '../core/alert-config';
 import { decideFollow, stepPoint, type AlertKind, type FollowState, type PointState, type PointStep } from '../core/alert-rule';
 import { alertMessage, clearMessage, type AlertMessage } from '../core/alert-text';
 import { HOLD_MS } from '../core/hysteresis';
 import { assessPoint, type Assessment } from '../core/risk';
+import type { AlertStateBlob, FollowRow, FollowUpdate, PlaceRow } from './repo';
 import { inputAt, type Snapshot } from './snapshot';
-import type { FollowRow, FollowUpdate, PlaceRow } from './worker-client';
-
-/** Place-level alert state (spec §3), one opaque kv row written once per run. */
-export interface AlertStateBlob { v: 1; gen: string; places: Record<string, PointState> }
-export const BLOB_MAX_BYTES = 900_000;
-
-export function parseBlob(value: string | null): AlertStateBlob | null {
-  if (!value) return null;
-  try {
-    const b = JSON.parse(value) as AlertStateBlob;
-    return b && b.v === 1 && typeof b.gen === 'string' && typeof b.places === 'object' && b.places !== null && !Array.isArray(b.places) ? b : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Serialise within `max` bytes: drop places without an episode first (their hysteresis just
- *  restarts — never a wrong clear, since `below` must build up again), then hysteresis times of
- *  episode places (keeping ep/below). */
-export function packBlob(b: AlertStateBlob, max = BLOB_MAX_BYTES): string {
-  const bytes = (x: AlertStateBlob) => Buffer.byteLength(JSON.stringify(x));
-  if (bytes(b) <= max) return JSON.stringify(b);
-  const places: Record<string, PointState> = { ...b.places };
-  const out: AlertStateBlob = { ...b, places };
-  let total = bytes(b);
-  for (const k of Object.keys(places)) {
-    if (total <= max) break;
-    if (places[k]!.ep) continue;
-    total -= Buffer.byteLength(JSON.stringify({ [k]: places[k] })) - 1; // `"k":{…},` in the full object
-    delete places[k];
-  }
-  if (bytes(out) <= max) return JSON.stringify(out);
-  for (const k of Object.keys(places)) if (!places[k]!.ep) delete places[k];
-  for (const k of Object.keys(places)) {
-    const p = places[k]!;
-    places[k] = { ep: 1, ...(p.below ? { below: p.below } : {}) };
-  }
-  return JSON.stringify(out);
-}
-
-/** After a 409 on PUT state (spec §5.1 step 9): a newer writer wins (null = do not write). */
-export function mergeForRetry(theirs: AlertStateBlob | null, ours: AlertStateBlob): AlertStateBlob | null {
-  if (theirs && Date.parse(theirs.gen) > Date.parse(ours.gen)) return null;
-  return ours;
-}
+export type { AlertStateBlob } from './repo';
 
 export interface PointEval { step: PointStep; a: Assessment | null; joined: boolean }
+type EvalCounts = { valid: number; shown3: number; shown4: number; gap: number };
+interface EvalAcc { points: Map<string, PointEval>; next: Record<string, PointState>; counts: EvalCounts; prevGen: string | null; gap: boolean }
 
-export function evaluatePoints(snap: Snapshot, places: PlaceRow[], prev: AlertStateBlob | null): {
-  points: Map<string, PointEval>; blob: AlertStateBlob; counts: { valid: number; shown3: number; shown4: number; gap: number };
-} {
-  const points = new Map<string, PointEval>();
-  const next: Record<string, PointState> = {};
-  const counts = { valid: 0, shown3: 0, shown4: 0, gap: 0 };
+function startEval(snap: Snapshot, prev: AlertStateBlob | null): EvalAcc {
   const prevGen = prev?.gen ?? null;
-  // Data gap (I1): runs that evaluated nothing (Worker down, D1 quota, error, timeout, alerts
-  // switched off) wrote no state, so `below` would span data we never saw. Restart every clock;
-  // l3/l4 (card hysteresis) and ep stay.
+  // Data gap (I1): runs that evaluated nothing wrote no state, so `below` would span data we never
+  // saw. Restart every clock; l3/l4 (card hysteresis) and ep stay.
   const gap = snap.ok && prevGen !== null && (Date.parse(snap.gen) - Date.parse(prevGen)) / 60e3 > ALERT.maxSnapshotAgeMin;
-  if (gap) counts.gap = 1;
-  for (const p of places) {
-    let before = prev?.places[p.k];
-    if (gap && before?.below !== undefined) {
-      before = { ...before };
-      delete before.below;
-    }
-    let a: Assessment | null = null;
-    let step: PointStep;
-    if (snap.ok) {
-      const input = inputAt(snap, p.lat, p.lon);
-      a = assessPoint(p.lat, p.lon, input);
-      step = stepPoint(before, { snapshotOk: true, raw: a.level, incomplete: !!input.incomplete }, snap.gen);
-    } else {
-      step = stepPoint(before, { snapshotOk: false }, snap.gen);
-    }
-    const joined = prevGen !== null && before?.l3 !== undefined && Date.parse(before.l3) >= Date.parse(prevGen) - HOLD_MS;
-    points.set(p.k, { step, a, joined });
-    if (step.valid) counts.valid++;
-    if (step.valid && step.shown === 3) counts.shown3++;
-    if (step.valid && step.shown === 4) counts.shown4++;
-    if (Object.keys(step.next).length) next[p.k] = step.next;
+  return { points: new Map(), next: {}, counts: { valid: 0, shown3: 0, shown4: 0, gap: gap ? 1 : 0 }, prevGen, gap };
+}
+
+function stepEval(acc: EvalAcc, snap: Snapshot, prev: AlertStateBlob | null, p: PlaceRow): void {
+  let before = prev?.places[p.k];
+  if (acc.gap && before?.below !== undefined) {
+    before = { ...before };
+    delete before.below;
   }
-  return { points, blob: { v: 1, gen: snap.ok ? snap.gen : (prevGen ?? snap.gen), places: next }, counts };
+  let a: Assessment | null = null;
+  let step: PointStep;
+  if (snap.ok) {
+    const input = inputAt(snap, p.lat, p.lon);
+    a = assessPoint(p.lat, p.lon, input);
+    step = stepPoint(before, { snapshotOk: true, raw: a.level, incomplete: !!input.incomplete }, snap.gen);
+  } else {
+    step = stepPoint(before, { snapshotOk: false }, snap.gen);
+  }
+  const joined = acc.prevGen !== null && before?.l3 !== undefined && Date.parse(before.l3) >= Date.parse(acc.prevGen) - HOLD_MS;
+  acc.points.set(p.k, { step, a, joined });
+  if (step.valid) acc.counts.valid++;
+  if (step.valid && step.shown === 3) acc.counts.shown3++;
+  if (step.valid && step.shown === 4) acc.counts.shown4++;
+  if (Object.keys(step.next).length) acc.next[p.k] = step.next;
+}
+
+function finishEval(acc: EvalAcc, snap: Snapshot): { points: Map<string, PointEval>; blob: AlertStateBlob; counts: EvalCounts } {
+  return { points: acc.points, blob: { v: 1, gen: snap.ok ? snap.gen : (acc.prevGen ?? snap.gen), places: acc.next }, counts: acc.counts };
+}
+
+export function evaluatePoints(snap: Snapshot, places: PlaceRow[], prev: AlertStateBlob | null): ReturnType<typeof finishEval> {
+  const acc = startEval(snap, prev);
+  for (const p of places) stepEval(acc, snap, prev, p);
+  return finishEval(acc, snap);
+}
+
+/** The same, giving the event loop back every `every` places so the 30-second heartbeat timer of
+ *  the alerts process keeps beating during a 100,000-place evaluation (spec §4.3). */
+export async function evaluatePointsYielding(snap: Snapshot, places: PlaceRow[], prev: AlertStateBlob | null, every = 1000): Promise<ReturnType<typeof finishEval>> {
+  const acc = startEval(snap, prev);
+  for (let i = 0; i < places.length; i++) {
+    stepEval(acc, snap, prev, places[i]!);
+    if ((i + 1) % every === 0) await yieldNow();
+  }
+  return finishEval(acc, snap);
 }
 
 /** Places whose followers can get a message this run (spec §5.1 step 5). */

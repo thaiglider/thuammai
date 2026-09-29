@@ -9,3 +9,5 @@ playwright-report/
 worker/wrangler.jsonc
 worker/.wrangler/
 .wrangler/
+.secrete/
+server/dist/

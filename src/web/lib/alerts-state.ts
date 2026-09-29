@@ -29,8 +29,9 @@ export const TELEGRAM_LINK_TH = 'รับแจ้งเตือนทาง T
  *  it can still show a point's level (final review M1). */
 export const FULL_WITH_TG_TH = 'ระบบแจ้งเตือนรับผู้ใช้เต็มชั่วคราว — ดูระดับทาง Telegram หรือเปิดเว็บดูเป็นระยะ';
 
-/** `holdUntil`: no sync before this time (the Worker's per-day new-places cap, m4). */
-export interface AlertsKv { on: true; endpoint: string; syncedAt: string; placesHash: string; pending?: boolean; holdUntil?: string }
+/** `holdUntil`: no sync before this time (per-day new-places cap, m4). `origin`: the alerts server
+ *  this state was synced with — a different one (e.g. after the move to the VPS) re-syncs (R14). */
+export interface AlertsKv { on: true; endpoint: string; syncedAt: string; placesHash: string; pending?: boolean; holdUntil?: string; origin?: string }
 const KEY = 'alerts';
 export function loadAlerts(kv: KV): AlertsKv | null {
   const s = getJson<Partial<AlertsKv> | null>(kv, KEY, null);
@@ -53,6 +54,8 @@ export function alertsPausedByBuild(cfg: AlertsCfg, env: Pick<Env, 'canServiceWo
   return alertsOn(kv) && (!pushConfigured(cfg) || !env.canServiceWorker);
 }
 export const ALERTS_PAUSED_TH = 'ระบบแจ้งเตือนหยุดชั่วคราว — ตอนนี้จะไม่ได้รับแจ้งเตือน เปิดเว็บดูเอง';
+/** The server says it is stalled, or cannot be reached twice (spec §8.1, R13). */
+export const ALERTS_DOWN_TH = 'ระบบแจ้งเตือนขัดข้อง — ตอนนี้อาจไม่ได้รับแจ้งเตือน เปิดเว็บดูเป็นระยะ';
 export interface PushGlobals { hasPushManager: boolean; hasNotification: boolean }
 export function browserPushGlobals(): PushGlobals {
   return { hasPushManager: typeof window !== 'undefined' && 'PushManager' in window, hasNotification: typeof Notification !== 'undefined' };
@@ -71,4 +74,4 @@ export function alertsMode(cfg: AlertsCfg, env: Env, kv: KV, g: PushGlobals, pla
 
 export const GPS_CONFIRM_TH = 'ใช้ตำแหน่งปัจจุบันเพื่อหาความเสี่ยงของจุดนี้เท่านั้น ตำแหน่งไม่ถูกส่งออกจากเครื่อง — ดำเนินการต่อ?';
 export const GPS_CONFIRM_ALERTS_TH = 'ใช้ตำแหน่งปัจจุบันเพื่อหาความเสี่ยงของจุดนี้เท่านั้น ตำแหน่งไม่ถูกส่งออกจากเครื่อง ยกเว้นพิกัดโดยประมาณ (~100 ม.) ที่ส่งให้ระบบแจ้งเตือนถ้าคุณบันทึกจุดนี้ — ดำเนินการต่อ?';
-export const ALERTS_PRIVACY_TH = 'ชื่อจุด จุดที่บันทึก และการตั้งค่าอยู่ในเครื่องของคุณเท่านั้น · ถ้าเปิดแจ้งเตือน ระบบแจ้งเตือน (Cloudflare) เก็บพิกัดโดยประมาณ (~100 ม.) ของจุดที่ติดตามและที่อยู่สำหรับส่งแจ้งเตือนของเบราว์เซอร์ ไม่เก็บชื่อจุดและ IP — ลบเมื่อเลิกรับแจ้งเตือน หรือเมื่อไม่ได้เปิดเว็บนาน 180 วัน';
+export const ALERTS_PRIVACY_TH = 'ชื่อจุด จุดที่บันทึก และการตั้งค่าอยู่ในเครื่องของคุณเท่านั้น · ถ้าเปิดแจ้งเตือน ระบบแจ้งเตือน (เซิร์ฟเวอร์ของโครงการ ตั้งอยู่ต่างประเทศ) เก็บพิกัดโดยประมาณ (~100 ม.) ของจุดที่ติดตามและที่อยู่สำหรับส่งแจ้งเตือนของเบราว์เซอร์ ไม่เก็บชื่อจุดและ IP — ลบเมื่อเลิกรับแจ้งเตือน หรือเมื่อไม่ได้เปิดเว็บนาน 180 วัน (สำเนาสำรองลบภายใน 14 วัน)';

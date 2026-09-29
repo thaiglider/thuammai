@@ -1,0 +1,12 @@
+{
+	local_certs
+	skip_install_trust
+}
+
+(security_headers) {
+	header X-Content-Type-Options nosniff
+}
+
+other.test {
+	respond "another app on the shared host"
+}

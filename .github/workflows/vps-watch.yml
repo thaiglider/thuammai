@@ -1,0 +1,20 @@
+name: vps-watch
+# The last safety net (spec §10.3): Uptime Kuma runs on the same VPS and cannot report the whole
+# machine being down; a red run here makes GitHub e-mail the owner. No secret, no permission.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  status:
+    if: ${{ vars.ALERTS_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          ALERTS_ORIGIN: ${{ vars.ALERTS_ORIGIN }}
+        run: |
+          body="$(curl -fsS --retry 3 --retry-delay 20 --retry-all-errors --max-time 10 "$ALERTS_ORIGIN/v1/status")"
+          echo "$body"
+          echo "$body" | grep -Eq '"alerts":"(on|paused)"' || { echo "the alert system is not running"; exit 1; }

@@ -1,0 +1,27 @@
+# CI only (F2-8, passed through THUAMMAI_COMPOSE_OVERRIDE): the real hosts of the push service,
+# Telegram and Pages resolve to the fakes; the alerts rule clock is shifted to the fixture.
+# Uptime Kuma needs nothing here: the fake answers as uptime-kuma:3001 on ai-stack_ai-stack.
+services:
+  api:
+    networks: { fakes: {} }
+    extra_hosts: ["fcm.googleapis.com:172.30.0.10", "api.telegram.org:172.30.0.10", "pages.test:172.30.0.10"]
+    environment:
+      NODE_EXTRA_CA_CERTS: /ci/ca.pem
+      SITE_URL: http://pages.test:8088/thuammai/
+    volumes: ["${CI_DIR:?}/certs/ca.pem:/ci/ca.pem:ro"]
+  alerts:
+    networks: { fakes: {} }
+    extra_hosts: ["fcm.googleapis.com:172.30.0.10", "api.telegram.org:172.30.0.10", "pages.test:172.30.0.10"]
+    environment:
+      NODE_EXTRA_CA_CERTS: /ci/ca.pem
+      SITE_URL: http://pages.test:8088/thuammai/
+      THUAMMAI_CLOCK_OFFSET_MS: "${CI_CLOCK_OFFSET_MS:?}"
+    volumes: ["${CI_DIR:?}/certs/ca.pem:/ci/ca.pem:ro"]
+  tools:
+    networks: { fakes: {} }
+    extra_hosts: ["api.telegram.org:172.30.0.10"]
+    environment:
+      NODE_EXTRA_CA_CERTS: /ci/ca.pem
+    volumes: ["${CI_DIR:?}/certs/ca.pem:/ci/ca.pem:ro"]
+networks:
+  fakes: { external: true, name: thuammai_ci_fakes }

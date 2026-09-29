@@ -1,23 +1,26 @@
-/* The ONLY module in src/alerts that may write to the console (eslint no-console elsewhere).
- * The repository is public, so its Actions logs are public (spec §5.6, research §5): a log line is
- * a fixed event name and whole-number counts — never a message, stack, URL, endpoint, key, chat
- * id, label, coordinate or token. */
-export type LogEvent = 'run' | 'skip' | 'send' | 'error';
+/* The ONLY module in src/alerts and server/src (owner tools aside) that may write to the console
+ * (ESLint no-console elsewhere). Logs are viewed in dozzle on a shared host (spec §7.4, F7), so a
+ * line is a service, a fixed event name and whole-number counts — never a message, stack, URL,
+ * endpoint, key, chat id, label, coordinate, IP, token, SQL or SQL parameter. */
+export type Service = 'alerts' | 'api';
+export type LogEvent = 'run' | 'skip' | 'send' | 'error' | 'tick' | 'cleanup' | 'start' | 'stop' | 'stats' | 'migrate';
 export type Counts = Record<string, number>;
 
-export const LOG_LINE_RE = /^alerts (run|skip|send|error)( [a-z0-9_]+=\d+)*$/;
+export const LOG_LINE_RE = /^(alerts|api) [a-z_]+( [a-z0-9_]+=\d+)*$/;
 const KEY_RE = /^[a-z0-9_]+$/;
 
-export function formatCounts(event: LogEvent, counts: Counts): string {
+export function formatLine(service: Service, event: LogEvent, counts: Counts): string {
   const parts = Object.entries(counts)
     .filter(([k, v]) => KEY_RE.test(k) && Number.isFinite(v))
     .map(([k, v]) => `${k}=${Math.max(0, Math.round(v))}`);
-  return ['alerts', event, ...parts].join(' ');
+  return [service, event, ...parts].join(' ');
 }
+export const formatCounts = (event: LogEvent, counts: Counts): string => formatLine('alerts', event, counts);
 
-export function logCounts(event: LogEvent, counts: Counts): void {
-  console.log(formatCounts(event, counts));
+export function logLine(service: Service, event: LogEvent, counts: Counts): void {
+  console.log(formatLine(service, event, counts));
 }
+export const logCounts = (event: LogEvent, counts: Counts): void => logLine('alerts', event, counts);
 
 /** An error as counts: its class name (letters/digits only) and a numeric HTTP status if any. */
 export function errorCounts(e: unknown): Counts {

@@ -1,0 +1,244 @@
+# thuammai — compose project on the owner's shared VPS (spec §4, R17, R29, R30).
+# Started only by bin/thuammai and bin/update.sh from $THUAMMAI_HOME/releases/<id>/.
+# No service publishes a port; every limit is a ceiling on a machine shared with other apps.
+name: thuammai
+
+x-logging: &logging
+  driver: local
+  options: { max-size: 10m, max-file: "3" }
+
+x-app: &app
+  image: thuammai-local:${IMAGE_TAG:?IMAGE_TAG is not set}
+  pull_policy: never
+  user: "${THUAMMAI_UID:?}:${THUAMMAI_GID:?}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging: *logging
+
+services:
+  db:
+    image: ${DB_IMAGE:-postgis/postgis:17-3.5}
+    pull_policy: missing
+    restart: unless-stopped
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    environment:
+      POSTGRES_DB: thuammai
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superuser
+      TZ: UTC
+    secrets: [pg_superuser, pg_owner, pg_app]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ${THUAMMAI_HOME:?}/db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ${THUAMMAI_HOME:?}/db/init/20-roles.sh:/docker-entrypoint-initdb.d/20-roles.sh:ro
+    networks: [internal]
+    shm_size: 128mb
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d thuammai"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G, pids: 256 }
+    logging: *logging
+
+  api:
+    <<: *app
+    command: ["node", "dist/api.mjs"]
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=160
+      PGHOST: db
+      PGDATABASE: thuammai
+      PGUSER: thuammai_app
+      PGPASSWORD_FILE: /run/secrets/pg_app
+      RATE_HMAC_KEY_FILE: /run/secrets/rate_hmac_key
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      TELEGRAM_WEBHOOK_SECRET_FILE: /run/secrets/telegram_webhook_secret
+      SITE_ORIGIN: ${SITE_ORIGIN:-}
+      SITE_URL: ${SITE_URL:-}
+      ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
+      CLIENT_IP_MODE: ${CLIENT_IP_MODE:-direct}
+      TRUSTED_PROXY_HOST: ${TRUSTED_PROXY_HOST:-caddy}
+    secrets: [pg_app, rate_hmac_key, telegram_bot_token, telegram_webhook_secret]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    networks:
+      internal: {}
+      proxy:
+        aliases: [thuammai-api]
+    depends_on:
+      db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "dist/tools/health.mjs", "--live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M, pids: 256 }
+
+  # Joins "egress" (the shared ai-stack_ai-stack network, F2-K) so its Kuma push reaches
+  # http://uptime-kuma:3001 directly — never through the public uptime.thaiglider.cloud
+  # (which answers an auth redirect) and never through a host curl.
+  alerts:
+    <<: *app
+    command: ["node", "dist/alerts.mjs"]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    environment:
+      TZ: UTC
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=384
+      TMPDIR: /tmp
+      PGHOST: db
+      PGDATABASE: thuammai
+      PGUSER: thuammai_app
+      PGPASSWORD_FILE: /run/secrets/pg_app
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY_FILE: /run/secrets/vapid_private_key
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      KUMA_PUSH_ALERTS_FILE: /run/secrets/kuma_push_alerts
+      SITE_URL: ${SITE_URL:-}
+      ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
+    secrets: [pg_app, vapid_private_key, telegram_bot_token, kuma_push_alerts]
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    networks: [internal, egress]
+    depends_on:
+      db: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M, pids: 256 }
+
+  migrate:
+    <<: *app
+    profiles: [tools]
+    command: ["node", "dist/migrate.mjs"]
+    environment:
+      TZ: UTC
+      PGHOST: db
+      PGDATABASE: thuammai
+      PGUSER: thuammai_owner
+      PGPASSWORD_FILE: /run/secrets/pg_owner
+      MIGRATIONS_DIR: server/migrations
+    secrets: [pg_owner]
+    networks: [internal]
+    depends_on:
+      db: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M, pids: 256 }
+
+  # One-shot helper container (profile tools). bin/update.sh, bin/backup.sh and bin/hostcheck.sh run
+  # it as `docker compose run --rm tools node dist/tools/kuma.mjs <file> up|down [msg]` to push
+  # deploy/backup/host status to Kuma over the shared ai-stack_ai-stack network (F2-K); the push URL
+  # files (kuma_push_alerts, kuma_push_backup, kuma_push_deploy, kuma_push_host) live under
+  # $THUAMMAI_HOME/secrets and only those four files are bind-mounted read-only below (never the whole
+  # secrets directory, never a host curl). `thuammai install` creates them (empty) before any compose
+  # call, so docker never makes a directory in their place; secret_set rewrites them in place.
+  tools:
+    <<: *app
+    profiles: [tools]
+    command: ["node", "dist/tools/keys.mjs", "--random"]
+    environment:
+      TZ: UTC
+      API_HOST: ${API_HOST:-}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      TELEGRAM_WEBHOOK_SECRET_FILE: /run/secrets/telegram_webhook_secret
+    secrets: [telegram_bot_token, telegram_webhook_secret]
+    volumes:
+      - ${THUAMMAI_HOME:?}/secrets/kuma_push_alerts:/run/host-secrets/kuma_push_alerts:ro
+      - ${THUAMMAI_HOME:?}/secrets/kuma_push_backup:/run/host-secrets/kuma_push_backup:ro
+      - ${THUAMMAI_HOME:?}/secrets/kuma_push_deploy:/run/host-secrets/kuma_push_deploy:ro
+      - ${THUAMMAI_HOME:?}/secrets/kuma_push_host:/run/host-secrets/kuma_push_host:ro
+    networks: [egress]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M, pids: 256 }
+
+  backup:
+    image: ${DB_IMAGE:-postgis/postgis:17-3.5}
+    pull_policy: missing
+    profiles: [tools]
+    user: "${THUAMMAI_UID:?}:${THUAMMAI_GID:?}"
+    entrypoint: ["/bin/sh", "/opt/thuammai/pg-job.sh"]
+    command: ["verify", "/dev/null"]
+    environment:
+      TZ: UTC
+      HOME: /tmp
+    secrets: [pg_superuser]
+    volumes:
+      - ${THUAMMAI_HOME:?}/backups:/backups
+      - ./db/pg-job.sh:/opt/thuammai/pg-job.sh:ro
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal]
+    depends_on:
+      db: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M, pids: 256 }
+    logging: *logging
+
+  offsite:
+    image: restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
+    profiles: [tools]
+    user: "${THUAMMAI_UID:?}:${THUAMMAI_GID:?}"
+    entrypoint: ["/bin/sh", "/opt/thuammai/restic-job.sh"]
+    command: ["snapshots"]
+    environment:
+      TZ: UTC
+      HOME: /tmp
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+      RESTIC_CACHE_DIR: /tmp/restic-cache
+    secrets: [restic_password, restic_repository, restic_env]
+    volumes:
+      - ${THUAMMAI_HOME:?}/backups/daily:/data/daily:ro
+      - ${THUAMMAI_HOME:?}/.env:/data/config/.env:ro
+      - ${THUAMMAI_HOME:?}/secrets:/data/config/secrets:ro
+      - ${THUAMMAI_HOME:?}/restore:/restore
+      - ./db/restic-job.sh:/opt/thuammai/restic-job.sh:ro
+    read_only: true
+    tmpfs: ["/tmp:size=256m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [egress]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M, pids: 256 }
+    logging: *logging
+
+networks:
+  internal: { internal: true }
+  # F2-K: "egress" is the same external network as "proxy" (ai-stack_ai-stack), not a private bridge
+  # to the open internet. uptime-kuma lives on that network, so alerts and the tools-profile push
+  # container reach it at http://uptime-kuma:3001 with no auth redirect and no host curl. Telegram
+  # calls (also made from "egress") go out through that network's own gateway.
+  egress: { external: true, name: "${PROXY_NETWORK:-ai-stack_ai-stack}" }
+  proxy: { external: true, name: "${PROXY_NETWORK:-ai-stack_ai-stack}" }
+
+volumes:
+  pgdata: {}
+
+secrets:
+  pg_superuser: { file: "${THUAMMAI_HOME:?}/secrets/pg_superuser" }
+  pg_owner: { file: "${THUAMMAI_HOME:?}/secrets/pg_owner" }
+  pg_app: { file: "${THUAMMAI_HOME:?}/secrets/pg_app" }
+  rate_hmac_key: { file: "${THUAMMAI_HOME:?}/secrets/rate_hmac_key" }
+  vapid_private_key: { file: "${THUAMMAI_HOME:?}/secrets/vapid_private_key" }
+  telegram_bot_token: { file: "${THUAMMAI_HOME:?}/secrets/telegram_bot_token" }
+  telegram_webhook_secret: { file: "${THUAMMAI_HOME:?}/secrets/telegram_webhook_secret" }
+  kuma_push_alerts: { file: "${THUAMMAI_HOME:?}/secrets/kuma_push_alerts" }
+  restic_password: { file: "${THUAMMAI_HOME:?}/secrets/restic_password" }
+  restic_repository: { file: "${THUAMMAI_HOME:?}/secrets/restic_repository" }
+  restic_env: { file: "${THUAMMAI_HOME:?}/secrets/restic_env" }

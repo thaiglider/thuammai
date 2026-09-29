@@ -100,7 +100,7 @@ export async function enableAlerts(d: PushDeps, places: readonly Place[]): Promi
   for (let attempt = 0; ; attempt++) {
     const r = await post(d, sub, places);
     if (r.status === 200) {
-      saveAlerts(d.kv, { on: true, endpoint: sub.endpoint, syncedAt: d.now().toISOString(), placesHash: placesHash(places) });
+      saveAlerts(d.kv, { on: true, endpoint: sub.endpoint, syncedAt: d.now().toISOString(), placesHash: placesHash(places), origin: d.cfg.origin });
       await writeAlertPlaces(d.caches, d.base, places);
       return 'ok';
     }
@@ -133,11 +133,11 @@ export async function syncNow(d: PushDeps, places: readonly Place[]): Promise<Sy
   await writeAlertPlaces(d.caches, d.base, places);
   const hash = placesHash(places);
   const fresh = d.now().getTime() - Date.parse(st.syncedAt) < WEEK_MS;
-  if (!st.pending && hash === st.placesHash && sub.endpoint === st.endpoint && fresh) return 'unchanged';
+  if (!st.pending && hash === st.placesHash && sub.endpoint === st.endpoint && fresh && st.origin === d.cfg.origin) return 'unchanged';
   if (st.holdUntil && d.now().getTime() < Date.parse(st.holdUntil)) return 'limited';
   const r = await post(d, sub, places);
   if (r.status === 200) {
-    saveAlerts(d.kv, { on: true, endpoint: sub.endpoint, syncedAt: d.now().toISOString(), placesHash: hash });
+    saveAlerts(d.kv, { on: true, endpoint: sub.endpoint, syncedAt: d.now().toISOString(), placesHash: hash, origin: d.cfg.origin });
     return 'ok';
   }
   if (tooManyPlaces(r)) {
@@ -190,5 +190,56 @@ export function browserPushDeps(kv: KV, base: string): PushDeps {
     },
     requestPermission: () => Notification.requestPermission(),
     caches: typeof caches !== 'undefined' ? caches : null,
+  };
+}
+
+export type ServerStatus = 'on' | 'paused' | 'down';
+export const STATUS_EVERY_MS = 10 * 60_000;
+export const STATUS_RETRY_MS = 60_000;
+export const STATUS_MAX_PER_WINDOW = 2;
+
+/** GET /v1/status (spec §8.1): 'down' when the server says it is stalled; null when the request
+ *  failed (network, timeout, 5xx, bad JSON). Never called without an alerts configuration. */
+export async function checkStatus(d: Pick<PushDeps, 'cfg' | 'fetch'>, timeoutMs = 5_000): Promise<ServerStatus | null> {
+  if (!pushConfigured(d.cfg)) return null;
+  try {
+    const r = await d.fetch(`${d.cfg.origin}/v1/status`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return null;
+    const a = ((await r.json()) as { alerts?: unknown }).alerts;
+    return a === 'on' ? 'on' : a === 'paused' ? 'paused' : a === 'stalled' ? 'down' : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface StatusTimers { now(): number; later(fn: () => void, ms: number): void }
+const REAL_TIMERS: StatusTimers = { now: () => Date.now(), later: (fn, ms) => { setTimeout(fn, ms); } };
+
+/** R13: at most one check per 10 minutes (plus one retry 60 s after a failure), never more than 2
+ *  requests per 10 minutes in this tab; results live only in memory. A second failure → 'down'. */
+export function statusMonitor(d: Pick<PushDeps, 'cfg' | 'fetch'>, onChange: (s: ServerStatus) => void, t: StatusTimers = REAL_TIMERS): { maybeCheck(): void } {
+  let last = -Infinity;
+  let retrying = false;
+  const sent: number[] = [];
+  const budget = (): boolean => {
+    const now = t.now();
+    while (sent.length && now - sent[0]! >= STATUS_EVERY_MS) sent.shift();
+    return sent.length < STATUS_MAX_PER_WINDOW;
+  };
+  const attempt = async (isRetry: boolean): Promise<void> => {
+    if (!budget()) { retrying = false; return; }
+    sent.push(t.now());
+    last = t.now();
+    const s = await checkStatus(d);
+    if (s) { retrying = false; onChange(s); return; }
+    if (isRetry) { retrying = false; onChange('down'); return; }
+    retrying = true;
+    t.later(() => { void attempt(true); }, STATUS_RETRY_MS);
+  };
+  return {
+    maybeCheck(): void {
+      if (retrying || t.now() - last < STATUS_EVERY_MS) return;
+      void attempt(false);
+    },
   };
 }

@@ -43,7 +43,7 @@ export function helpText(siteUrl: string): string {
     `วิธีใช้: แตะ "ส่งตำแหน่ง" หรือแนบตำแหน่ง → ดูระดับ → แตะ "ติดตามจุดนี้" (ได้ไม่เกิน ${CAPS.placesPerTarget} จุด)`,
     `แจ้งเตือนเมื่อจุดที่ติดตามถึงระดับ "${LEVEL_TH[ALERT.level as Level]}" ขึ้นไป · แจ้งอีกครั้งเมื่อต่ำกว่านั้นต่อเนื่อง ${minutesTh(ALERT.clearHoldMin)} · ระดับ${LEVEL_TH[ALERT.level as Level]}ไม่แจ้งซ้ำภายใน ${minutesTh(ALERT.repeatH * 60)} ยกเว้นขึ้นถึง "${LEVEL_TH[4]}"`,
     'ข้อมูลหาย = บอทเงียบ ไม่ได้แปลว่าปลอดภัย',
-    'เก็บอะไร: chat id, พิกัดโดยประมาณ (~100 ม.) และชื่อจุดที่คุณตั้ง — ลบทั้งหมดได้ด้วย /stop',
+    'เก็บอะไร: chat id, พิกัดโดยประมาณ (~100 ม.) และชื่อจุดที่คุณตั้ง บนเซิร์ฟเวอร์ของโครงการ (ต่างประเทศ) — ลบทั้งหมดได้ด้วย /stop (สำเนาสำรองลบภายใน 14 วัน)',
     '/list จุดที่ติดตาม · /stop เลิกทั้งหมดและลบข้อมูล',
     NOT_A_REPORT_TH,
     `ดูบนเว็บ: ${siteUrl}`,
@@ -52,6 +52,10 @@ export function helpText(siteUrl: string): string {
 }
 export const dbDownText = (siteUrl: string): string => `ระบบแจ้งเตือนขัดข้องชั่วคราว ลองใหม่ภายหลัง · ดูบนเว็บ: ${siteUrl}`;
 export const fullSystemText = (siteUrl: string): string => `ระบบแจ้งเตือนรับผู้ใช้เต็มชั่วคราว ดูบนเว็บ: ${siteUrl}`;
+/** ALERTS_PAUSED=1 on the server (spec §8.2, R16/R28): the answer to everything except deleting and listing. */
+export const pausedText = (siteUrl: string): string => `ระบบแจ้งเตือนหยุดชั่วคราว — ดูบนเว็บ: ${siteUrl}\n${NOT_A_REPORT_TH}`;
+/** Stage-1 line while the sender is stalled: no question is queued, so nothing is promised. */
+export const STALLED_LINE_TH = 'ระบบแจ้งเตือนขัดข้องชั่วคราว — ระดับของจุดนี้ดูบนเว็บได้ทันที';
 
 /** The card for a rounded point (the web offers to add it). */
 export function siteLink(siteUrl: string, key: string): string {
@@ -62,7 +66,7 @@ export const provinceTitle = (code: string, th: string): string => (code === '10
 
 export interface Stage1 {
   area: { name: string; level: Level; at: string; stale: boolean } | null;
-  pending: 'added' | 'full';
+  pending: 'added' | 'full' | 'stalled';
   link: string;
 }
 /** Immediate reply to a location (spec §7.2 step 1): the province overview, honestly labelled. */
@@ -76,8 +80,10 @@ export function stage1Text(o: Stage1): string {
     lines.push('รับตำแหน่งแล้ว');
   }
   lines.push(o.pending === 'added'
-    ? 'ระดับของจุดนี้จะส่งตามมาภายใน ~10–20 นาที'
-    : `มีคำถามรอคำตอบครบ ${CAPS.tgPendingPerChat} จุดแล้ว — ระดับของจุดนี้ดูบนเว็บได้ทันที`);
+    ? 'ระดับของจุดนี้จะส่งตามมาภายในไม่กี่นาที'
+    : o.pending === 'stalled'
+      ? STALLED_LINE_TH
+      : `มีคำถามรอคำตอบครบ ${CAPS.tgPendingPerChat} จุดแล้ว — ระดับของจุดนี้ดูบนเว็บได้ทันที`);
   lines.push(`ดูทันทีบนเว็บ: ${o.link}`, NO_OFFICIAL_ORDER);
   return lines.join('\n');
 }

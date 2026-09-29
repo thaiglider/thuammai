@@ -1,4 +1,4 @@
-/** Phase-2 alert constants (spec §1). Shared by the web app, the Worker and the alerts job. */
+/** Alert constants (phase-2 spec §1, phase-3A spec §7.5). Shared by the web app, the server and — until Plan F3 — the Worker. */
 export const ALERT = {
   level: 3,                // alert when the shown level (after hysteresis) is ≥ 3
   repeatH: 6,              // per (follower × place): at most one level-3 alert per 6 h
@@ -11,11 +11,12 @@ export const ALERT = {
 export const PUSH_TTL_S = { alert: 10_800, clear: 3_600 } as const;
 export const CAPS = {
   placesPerTarget: 10,
-  maxTargets: 10_000,
-  maxPlaces: 20_000,
-  newTargetsPerDay: 2_000,
+  // Phase 3A (spec §7.5, R18): no D1 quota any more; bounded by the RAM given to `alerts` (perf test).
+  maxTargets: 50_000,
+  maxPlaces: 100_000,
+  newTargetsPerDay: 10_000,
   newPlacesPerTargetPerDay: 30, // per-target churn cap (spec §8 review): caps repeated resubscribe-with-new-places abuse
-  pushPerRun: 5_000, tgPerRun: 1_500,
+  pushPerRun: 20_000, tgPerRun: 8_000,
   tgLabelMax: 20, tgPendingPerChat: 3, tgPendingTtlMin: 30,
   tgAwaitMin: 15, // the "name this place" wait after a follow expires (final review I2)
   batch: 200,

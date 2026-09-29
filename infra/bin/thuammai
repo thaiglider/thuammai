@@ -1,0 +1,633 @@
+#!/usr/bin/env bash
+# thuammai — the owner's commands on the VPS (spec §14 "คำสั่งบน VPS"). Runs as `deploy`, never root.
+set -euo pipefail
+# shellcheck source=lib.sh
+. "$(dirname "$(readlink -f "$0")")/lib.sh"
+
+# Secret env vars (non-interactive install / CI) are copied into unexported shell variables and
+# removed from the environment at once, so no docker/compose child process ever inherits them.
+ENV_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+ENV_EXPORT_PASS="${THUAMMAI_EXPORT_PASSPHRASE:-}"
+unset TELEGRAM_BOT_TOKEN THUAMMAI_EXPORT_PASSPHRASE
+ENV_KUMA_ALERTS="${KUMA_PUSH_ALERTS:-}"
+ENV_KUMA_BACKUP="${KUMA_PUSH_BACKUP:-}"
+ENV_KUMA_DEPLOY="${KUMA_PUSH_DEPLOY:-}"
+ENV_KUMA_HOST="${KUMA_PUSH_HOST:-}"
+unset KUMA_PUSH_ALERTS KUMA_PUSH_BACKUP KUMA_PUSH_DEPLOY KUMA_PUSH_HOST
+# env_kuma <monitor>: the KUMA_PUSH_<MONITOR> value this process started with (non-interactive install).
+env_kuma() {
+  case "$1" in
+    alerts) printf '%s' "$ENV_KUMA_ALERTS" ;;
+    backup) printf '%s' "$ENV_KUMA_BACKUP" ;;
+    deploy) printf '%s' "$ENV_KUMA_DEPLOY" ;;
+    host) printf '%s' "$ENV_KUMA_HOST" ;;
+  esac
+}
+
+# Paths removed on any exit (plaintext export stage, dumps, partial files, restore data, temp files).
+CLEANUP=()
+on_exit() {
+  local p
+  for p in "${CLEANUP[@]}"; do rm -rf -- "$p"; done
+}
+trap on_exit EXIT
+
+# lock_env: every command that edits .env or secrets holds the ops lock (F2-4) first.
+# refuse_during_restore: pause, resume, restart, telegram token, kuma and install would start api/alerts
+# on a database a stopped-half-way restore may have left incomplete — the owner finishes the restore first.
+refuse_during_restore() {
+  if restore_blocking; then
+    die "a restore did not finish — the database may be incomplete, so this waits. First put the data back: $(restore_hint) / การกู้คืนยังไม่เสร็จ"
+  fi
+}
+lock_env() { ops_lock wait || die "another thuammai job (update, backup or restore) is running — try again in a few minutes / มีงานอื่นของ thuammai กำลังทำงาน ลองใหม่อีกสักครู่"; }
+
+usage() {
+  cat <<'EOF'
+thuammai status | logs | version
+thuammai pause | resume                      (server-side emergency switch, R28 / หยุดแจ้งเตือนชั่วคราว)
+thuammai finish                              (after the Caddy block and DNS / หลังเพิ่ม Caddy และ DNS)
+thuammai caddy add                           (append our site block to the shared Caddyfile — asks first)
+thuammai kuma                                (Uptime Kuma push URLs)
+thuammai telegram set|delete                 (webhook)
+thuammai telegram token [--file <path>]      (bot token from stdin, a hidden prompt or a file — never an argument)
+thuammai backup now|export | restore [--yes] <daily/YYYY-MM-DD.dump|predeploy> | restore-test
+thuammai update now | retry <release id|all> | rollback | restart <db|api|alerts>
+thuammai secrets show | offsite setup [--env-file <path>]|check|snapshots | cron install|remove
+thuammai install [--non-interactive] [--telegram-token-file <path>] [--restore-from export:<file>|restic]
+thuammai uninstall [--purge]
+EOF
+}
+
+# ask/ask_secret <prompt>: one line from stdin; fail on end of input (callers decide what that means).
+ask() { local v=""; IFS= read -rp "$1" v || [ -n "$v" ] || return 1; printf '%s' "$v"; }
+ask_secret() {
+  local v=""
+  IFS= read -rsp "$1" v || [ -n "$v" ] || { printf '\n' >&2; return 1; }
+  printf '\n' >&2
+  printf '%s' "$v"
+}
+yes_no() { case "${1:-}" in y | Y | yes | Yes | YES) return 0 ;; *) return 1 ;; esac; }
+# read_env_lines: KEY=value credential lines until an empty line, without echo (never on screen).
+read_env_lines() {
+  local line out=""
+  say "credential lines KEY=value (e.g. AWS_ACCESS_KEY_ID=…, AWS_SECRET_ACCESS_KEY=…), hidden, then an empty line / ใส่ทีละบรรทัด (ไม่แสดงบนจอ) จบด้วยบรรทัดว่าง:" >&2
+  while IFS= read -rs line && [ -n "$line" ]; do out="$out$line"$'\n'; printf '.' >&2; done
+  printf '\n' >&2
+  printf '%s' "$out"
+}
+
+cmd_secrets_show() {
+  printf 'VAPID_PUBLIC_KEY=%s\n' "$(env_get VAPID_PUBLIC_KEY)"
+  printf 'VAPID_PRIVATE_KEY=%s\n' "$(secret_get vapid_private_key)"
+  printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$(secret_get telegram_webhook_secret)"
+  printf 'RATE_HMAC_KEY=%s\n' "$(secret_get rate_hmac_key)"
+  printf 'EXPORT_PASSPHRASE=%s\n' "$(secret_get export_passphrase)"
+  if [ -s "$TH/secrets/restic_password" ]; then
+    printf 'RESTIC_REPOSITORY=%s\n' "$(secret_get restic_repository)"
+    printf 'RESTIC_PASSWORD=%s\n' "$(secret_get restic_password)"
+  fi
+}
+
+# token_from_file <path>: the bot token in a file the owner copied here (e.g. scp of bottoken.txt).
+token_from_file() { [ -f "$1" ] || die "no such file: $1"; tr -d ' \r\n\t' <"$1"; }
+# bot_username: asks Telegram (getMe, from the tools container) who the stored token belongs to.
+# bot_check: sets BOT_USER (the bot username) and BOT_STATE — ok, rejected (Telegram answered 401/404 or
+# the token is malformed: telegram.mjs exits 3) or unknown (network, Telegram or compose trouble: we
+# could not check, so the stored token is kept — ruling T7-3).
+BOT_USER=""
+BOT_STATE=""
+bot_check() {
+  local out rc=0
+  out="$(tools_run node dist/tools/telegram.mjs getme 2>/dev/null)" || rc=$?
+  BOT_USER="$(printf '%s\n' "$out" | sed -n 's/^username=//p' | head -n 1)"
+  if [ "$rc" = 0 ] && [ -n "$BOT_USER" ]; then BOT_STATE=ok; elif [ "$rc" = 3 ]; then BOT_STATE=rejected; else BOT_STATE=unknown; fi
+}
+
+# set_kuma <monitor> <pasted URL> <strict>: stores the internal form (F2-K); strict = die on garbage.
+set_kuma() {
+  local m="$1" u
+  if ! u="$(kuma_url "$2")"; then
+    [ "$3" != 1 ] || die "KUMA_PUSH_$(printf '%s' "$m" | tr '[:lower:]' '[:upper:]') is not an Uptime Kuma push URL (…/api/push/<token>)"
+    say "kuma $m: not a push URL (…/api/push/<token>) — skipped / ไม่ใช่ URL push ของ Kuma — ข้าม"
+    return 0
+  fi
+  secret_set "kuma_push_$m" "$u"
+  say "kuma $m: stored as ${u%%/api/push/*}/api/push/… (Kuma's address on the shared docker network)"
+}
+kuma_prompt() {
+  printf "Uptime Kuma push URL of monitor 'thuammai %s' — paste it as shown; it is stored as http://uptime-kuma:3001/api/push/<token> / วาง URL push ของ Kuma (%s): " "$1" "$2"
+}
+
+# fetch_bundle <export:<file>|restic> <noni>: fills $TH/restore/data/{config/.env,config/secrets,daily/*.dump}
+fetch_bundle() {
+  local from="$1" noni="$2" file pass repo pw creds=""
+  rm -rf "$TH/restore/data"
+  CLEANUP+=("$TH/restore/data")
+  case "$from" in
+    export:*)
+      file="${from#export:}"
+      [ -f "$file" ] || die "no such file: $file"
+      if [ "$noni" = 1 ]; then pass="$ENV_EXPORT_PASS"; [ -n "$pass" ] || die "THUAMMAI_EXPORT_PASSPHRASE is not set"; else pass="$(ask_secret 'EXPORT_PASSPHRASE (from the recovery set / จากชุดกู้คืน): ')" || die "no passphrase"; fi
+      printf '%s' "$pass" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass stdin -in "$file" | tar -x -C "$TH/restore" || die "cannot decrypt or unpack $file (wrong passphrase?)"
+      pass=""
+      ;;
+    restic)
+      repo="$(ask 'RESTIC_REPOSITORY: ')" || die "no repository"
+      pw="$(ask_secret 'RESTIC_PASSWORD: ')" || die "no password"
+      creds="$(read_env_lines)"
+      secret_set restic_repository "$repo"
+      secret_set restic_password "$pw"
+      secret_set restic_env "$creds"
+      compose --profile tools run --rm --no-deps -T offsite restore >/dev/null 2>&1 || die "restic restore failed"
+      ;;
+    *) die "--restore-from export:<file> | restic" ;;
+  esac
+  [ -f "$TH/restore/data/config/.env" ] || die "the bundle has no .env"
+  cp -f "$TH/restore/data/config/.env" "$TH/.env"
+  chmod 600 "$TH/.env"
+  cp -f "$TH/restore/data/config/secrets/"* "$TH/secrets/"
+  secret_fix_modes
+}
+
+cmd_install() {
+  local noni=0 from="" tokfile="" tag host tok="" u out v m s before dump
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --non-interactive) noni=1 ;;
+      --restore-from) from="${2:-}"; shift ;;
+      --telegram-token-file) tokfile="${2:-}"; [ -n "$tokfile" ] || die "--telegram-token-file <path>"; shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+    shift
+  done
+  lock_env
+  refuse_during_restore
+  # --restore-from is for a NEW host (runbook case 3): on one that already has our database it would
+  # overwrite .env/secrets and drop the live data with none of restore.sh's safety (final review I2).
+  if [ -n "$from" ] && pgdata_exists; then
+    die "this host already has a thuammai database (volume ${PROJECT}_pgdata) — --restore-from is only for a new host. To put a dump back here: copy it into $TH/backups/daily and run thuammai restore daily/<file>.dump. To start over from the bundle: thuammai backup export first, then thuammai uninstall --purge, then bash setup.sh --restore-from …"
+  fi
+  tag="$(current_tag)"
+  mkdir -p "$TH/releases" "$TH/logs" "$TH/run" "$TH/exports" "$TH/restore" "$TH/secrets" "$TH/backups/daily" "$TH/backups/predeploy"
+  chmod 700 "$TH/backups" "$TH/backups/daily" "$TH/backups/predeploy"
+  for s in $SECRET_FILES; do
+    # A bind mount whose source file was missing makes docker create an (empty, root-owned)
+    # directory there; our 0700 secrets directory lets us remove it. Never one with content.
+    if [ -d "$TH/secrets/$s" ] && [ ! -L "$TH/secrets/$s" ]; then
+      rmdir "$TH/secrets/$s" 2>/dev/null || die "$TH/secrets/$s is a directory with files in it, not a secret file — look at it and remove it yourself, then run install again"
+      log "install: removed the empty directory docker made at secrets/$s"
+    fi
+    [ -e "$TH/secrets/$s" ] || secret_set "$s" ""
+  done
+  secret_fix_modes
+  env_set THUAMMAI_HOME "$TH"; env_set THUAMMAI_UID "$(id -u)"; env_set THUAMMAI_GID "$(id -g)"; env_set IMAGE_TAG "$tag"
+  if [ -n "$from" ]; then
+    fetch_bundle "$from" "$noni"
+    env_set THUAMMAI_HOME "$TH"; env_set THUAMMAI_UID "$(id -u)"; env_set THUAMMAI_GID "$(id -g)"; env_set IMAGE_TAG "$tag"; env_set FINISHED 0
+  fi
+  env_default SITE_ORIGIN https://thaiglider.github.io
+  env_default SITE_URL https://thaiglider.github.io/thuammai/
+  env_default ALERTS_PAUSED 0
+  env_default PROXY_NETWORK ai-stack_ai-stack
+  env_default TRUSTED_PROXY_HOST caddy
+  env_default CLIENT_IP_MODE direct
+  env_default KUMA_BASE_URL http://uptime-kuma:3001
+  env_default FINISHED 0
+  if [ -z "$(env_get API_HOST)" ]; then
+    if [ "$noni" = 1 ]; then host="${API_HOST:-flood.thaiglider.com}"; else host="$(ask 'API_HOST — the API domain / โดเมนของ API [flood.thaiglider.com]: ')" || host=""; host="${host:-flood.thaiglider.com}"; fi
+    valid_host "$host" || die "API_HOST must be a plain lower-case host name like flood.example.com (no *, port, comma, space, # or &) / API_HOST ต้องเป็นชื่อโดเมนธรรมดา"
+    env_set API_HOST "$host"
+  fi
+  valid_host "$(env_get API_HOST)" || die "API_HOST in $TH/.env is not a plain host name — fix that line first"
+  env_default VAPID_SUBJECT "https://$(env_get API_HOST)/"
+
+  # Secrets are made here, on the VPS, once; a re-run never replaces one (Review Focus 2). Database
+  # passwords are never made for an existing volume: it keeps the old ones (like the VAPID pair).
+  for s in pg_superuser pg_owner pg_app; do
+    if [ ! -s "$TH/secrets/$s" ] && pgdata_exists; then
+      die "the database volume ${PROJECT}_pgdata exists but secrets/$s is empty — put the old secret files back into $TH/secrets (from a thuammai backup export bundle: data/config/secrets/), or, if the data here is not needed, thuammai uninstall --purge and then bash setup.sh --restore-from …; new passwords would lock the app out of its data"
+    fi
+  done
+  for s in pg_superuser pg_owner pg_app rate_hmac_key telegram_webhook_secret export_passphrase; do
+    if [ ! -s "$TH/secrets/$s" ]; then
+      v="$(image_run node dist/tools/keys.mjs --random | tr -d '\n')" || v=""
+      [ -n "$v" ] || die "could not generate $s (keys.mjs)"
+      secret_set "$s" "$v"
+    fi
+  done
+  v=""
+  if [ ! -s "$TH/secrets/vapid_private_key" ]; then
+    [ -z "$(env_get VAPID_PUBLIC_KEY)" ] || die "VAPID_PUBLIC_KEY is set but the private key is missing — restore it from the recovery set; never generate new keys after launch"
+    out="$(image_run node dist/tools/keys.mjs --vapid)" || die "could not generate the VAPID pair (keys.mjs)"
+    v="$(printf '%s\n' "$out" | sed -n 's/^VAPID_PRIVATE_KEY=//p')"
+    [ -n "$v" ] || die "keys.mjs --vapid gave no private key"
+    secret_set vapid_private_key "$v"
+    env_set VAPID_PUBLIC_KEY "$(printf '%s\n' "$out" | sed -n 's/^VAPID_PUBLIC_KEY=//p')"
+    out=""
+    v=""
+  fi
+  [ -n "$(env_get VAPID_PUBLIC_KEY)" ] || die "VAPID_PUBLIC_KEY is missing while a private key exists — restore .env from the recovery bundle"
+
+  # The bot token: a file the owner names, TELEGRAM_BOT_TOKEN (non-interactive/CI) or a hidden
+  # prompt — never a command-line argument (ps, shell history).
+  if [ -n "$tokfile" ]; then
+    tok="$(token_from_file "$tokfile")"
+  elif [ ! -s "$TH/secrets/telegram_bot_token" ]; then
+    if [ "$noni" = 1 ]; then tok="$ENV_BOT_TOKEN"; else tok="$(ask_secret 'Telegram bot token from BotFather, hidden (Enter = no bot for now) / โทเค็นบอทจาก BotFather (ไม่แสดงบนจอ, Enter = ยังไม่ใช้บอท): ')" || tok=""; fi
+  fi
+  if [ -n "$tok" ]; then
+    secret_set telegram_bot_token "$tok"
+    tok=""
+    env_set TELEGRAM_BOT_USERNAME ""
+  fi
+  if [ -s "$TH/secrets/telegram_bot_token" ] && [ -z "$(env_get TELEGRAM_BOT_USERNAME)" ]; then
+    bot_check
+    case "$BOT_STATE" in
+      ok) env_set TELEGRAM_BOT_USERNAME "$BOT_USER" ;;
+      rejected) log "Telegram rejected the bot token — cleared; set it later with: thuammai telegram token"; secret_set telegram_bot_token "" ;;
+      *) log "warning: could not reach Telegram to check the bot token — kept it; the next install or 'thuammai telegram token' checks again" ;;
+    esac
+  fi
+  for m in alerts backup deploy host; do
+    if [ ! -s "$TH/secrets/kuma_push_$m" ]; then
+      if [ "$noni" = 1 ]; then v="$(env_kuma "$m")"; else v="$(ask "$(kuma_prompt "$m" "Enter = later, thuammai kuma")")" || v=""; fi
+      [ -z "$v" ] || set_kuma "$m" "$v" "$noni"
+    fi
+  done
+
+  db_pin || die "could not pin the Postgres image (docker pull of the image in compose.yaml failed?)"
+  before="$(restarts_snapshot)"
+  # The db config lives at the stable $TH/db (ruling T7-1); a changed one needs a new db container.
+  db_files "$tag" || die "could not copy the db config files to $TH/db"
+  if [ "$DB_FILES_CHANGED" = 1 ] && [ -n "$(compose ps -q db 2>/dev/null || true)" ]; then
+    compose up -d --wait --force-recreate db
+  else
+    compose up -d --wait db
+  fi
+  dump="$(newest "$TH/restore/data/daily" '*.dump')"
+  if [ -n "$dump" ]; then
+    cp -f "$TH/restore/data/daily/$dump" "$TH/backups/daily/$dump"
+    chmod 600 "$TH/backups/daily/$dump"
+    compose --profile tools run --rm --no-deps -T backup restore "/backups/daily/$dump" >/dev/null || die "restoring $dump failed"
+    log "install: restored $dump"
+  fi
+  compose --profile tools run --rm --no-deps -T migrate
+  compose up -d api alerts
+  gate "$tag" "$before" || die "api/alerts did not become healthy — see: thuammai logs"
+  rm -rf "$TH/restore/data"
+  cron_install
+  mkdir -p "$HOME/bin"
+  ln -sfn "$TH/current/bin/thuammai" "$HOME/bin/thuammai"
+
+  # The recovery set is printed once, on the first interactive install, then only by `secrets show`.
+  if [ "$noni" != 1 ] && [ ! -f "$TH/run/recovery-shown" ]; then
+    say ""
+    say "=== RECOVERY SET — put it in a password manager now (never chat, issues, commits) ==="
+    say "=== ชุดกู้คืน — เก็บในโปรแกรมจัดการรหัสผ่านเดี๋ยวนี้ (ห้ามส่งในแชต/issue/commit) ==="
+    cmd_secrets_show
+    say "======================================================================================"
+    v=""
+    while [ "$v" != saved ]; do v="$(ask "type 'saved' when it is stored / พิมพ์ saved เมื่อเก็บแล้ว: ")" || die "no answer — show it again later with: thuammai secrets show"; done
+    touch "$TH/run/recovery-shown"
+    # clear the screen and the terminal's scrollback
+    printf '\033[2J\033[3J\033[H'
+  fi
+  say ""
+  say "installed (release $tag). Next (owner guide docs/ops/vps-owner-setup.md) / ขั้นต่อไป:"
+  say "  1. DNS: A record 'flood' → this VPS, DNS only (grey cloud)"
+  say "  2. thuammai caddy add      (shows the block and a diff, asks before touching the shared Caddyfile)"
+  say "  3. thuammai finish"
+  say "  GitHub variables: ALERTS_ORIGIN=https://$(env_get API_HOST)  VAPID_PUBLIC_KEY=$(env_get VAPID_PUBLIC_KEY)  TELEGRAM_BOT_USERNAME=$(env_get TELEGRAM_BOT_USERNAME)"
+}
+
+# caddy add (F2-6, C3): print the block and the diff, append only after "y", keep a backup, validate
+# inside the shared caddy container, reload only when valid; any failure copies the backup back in
+# place (the file is bind-mounted into caddy — its inode must stay the same).
+cmd_caddy_add() {
+  local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host block dest bak ans new mounts
+  host="$(env_get API_HOST)"
+  [ -n "$host" ] || die "API_HOST is not set — run thuammai install first"
+  valid_host "$host" || die "API_HOST in $TH/.env is not a plain host name (no *, port, comma, space, # or &) — nothing changed"
+  [ -e "$file" ] || die "no Caddyfile at $file — set CADDYFILE=<path> if the stack keeps it elsewhere; nothing changed"
+  [ -f "$file" ] || die "$file is not a regular file — nothing changed"
+  [ -w "$file" ] || die "cannot write $file as $(id -un) — ask whoever runs the stack to append the block (owner guide step 5); nothing changed"
+  if grep -qxF "$host {" "$file"; then say "a site block for $host is already in $file / มีบล็อกของ $host อยู่แล้ว"; return 0; fi
+  if grep -q '^# thuammai — flood alerts API' "$file"; then
+    say "WARNING: $file already has a thuammai block for another host — remove it yourself if it is stale / มีบล็อกของ thuammai สำหรับโดเมนอื่นอยู่แล้ว"
+  fi
+  mounts="$(docker inspect caddy -f '{{range .Mounts}}{{.Source}} {{.Destination}}{{"\n"}}{{end}}' 2>/dev/null)" || die "no container named 'caddy' — nothing changed"
+  dest="$(printf '%s\n' "$mounts" | awk -v f="$file" -v d="$(dirname "$file")" -v b="$(basename "$file")" '$1 == f { print $2; exit } $1 == d { print $2 "/" b; exit }')"
+  [ -n "$dest" ] || die "the caddy container does not mount $file — it would never see the block; nothing changed"
+  block="$(sed "s#@API_HOST@#$host#g; s#@THUAMMAI_HOME@#$TH#g" "$(release_dir "$(current_tag)")/caddy/site-block.caddy")"
+  grep -q '^(security_headers)' "$file" || block="$(printf '%s\n' "$block" | grep -v 'import security_headers')"
+  say "---- block for $file / บล็อกที่จะเพิ่ม ----"
+  say "$block"
+  say "---- diff -u ----"
+  new="$(mktemp "$TH/run/Caddyfile.new.XXXXXX")"
+  CLEANUP+=("$new")
+  { cat "$file"; printf '\n%s\n' "$block"; } >"$new"
+  diff -u --label "$file" --label "$file (new)" "$file" "$new" || true
+  rm -f "$new"
+  say "-------------------------"
+  ans="$(ask "Append it, validate and then reload the shared caddy? / เพิ่มบล็อกนี้แล้วตรวจและรีโหลด caddy? [y/N]: ")" || ans=""
+  yes_no "$ans" || { say "nothing changed / ไม่ได้แก้ไขอะไร"; return 0; }
+  # The backup stays in our own directory (0700/0600), never next to the shared stack's files.
+  mkdir -p "$TH/run/caddy"
+  chmod 700 "$TH/run/caddy"
+  bak="$TH/run/caddy/Caddyfile.$(date +%Y%m%d%H%M%S)"
+  (umask 077 && cp "$file" "$bak")
+  chmod 600 "$bak"
+  cmp -s "$file" "$bak" || die "could not back up $file — nothing changed"
+  printf '\n%s\n' "$block" >>"$file"
+  if ! docker exec caddy caddy validate --config "$dest" --adapter caddyfile >/dev/null 2>&1; then
+    cp "$bak" "$file"
+    die "caddy validate rejected the new Caddyfile — restored it from $bak, caddy was NOT reloaded / ไฟล์ใหม่ไม่ผ่านการตรวจ — คืนไฟล์เดิมแล้ว ไม่ได้รีโหลด"
+  fi
+  if ! docker exec caddy caddy reload --config "$dest" --adapter caddyfile >/dev/null; then
+    cp "$bak" "$file"
+    die "caddy reload failed — restored $file from $bak; caddy keeps its previous config / รีโหลดไม่สำเร็จ — คืนไฟล์เดิมแล้ว"
+  fi
+  say "added and reloaded (backup: $bak) / เพิ่มและรีโหลดแล้ว"
+}
+
+cmd_finish() {
+  local host origin pre code out m
+  lock_env
+  host="$(env_get API_HOST)"
+  valid_host "$host" || die "API_HOST in $TH/.env is not a plain host name"
+  origin="$(env_get SITE_ORIGIN)"
+  curl_api -f "https://$host/v1/health" >/dev/null || die "https://$host/v1/health does not answer through caddy (DNS? site block? thuammai status)"
+  pre="$(curl_api -o /dev/null -D - -X OPTIONS -H "Origin: $origin" -H 'Access-Control-Request-Method: POST' "https://$host/v1/push/subscription" | tr -d '\r')"
+  printf '%s\n' "$pre" | head -n 1 | grep -q ' 204' || die "CORS preflight did not answer 204"
+  printf '%s\n' "$pre" | grep -qi "^access-control-allow-origin: $origin\$" || die "CORS preflight has no access-control-allow-origin: $origin (a caddy snippet may override it)"
+  code="$(curl_api -o /dev/null -w '%{http_code}' "https://$host/")"
+  [ "$code" = 302 ] || die "https://$host/ answered $code, expected 302 to the web"
+  say "ok: health, CORS and / through caddy"
+  if [ -s "$TH/secrets/telegram_bot_token" ]; then
+    if [ "$(env_get ALERTS_PAUSED)" = 1 ]; then
+      say "alerts are paused — the Telegram webhook is set by: thuammai resume"
+    else
+      out="$(tools_run node dist/tools/telegram.mjs set 2>&1)" || true
+      say "$out"
+      printf '%s\n' "$out" | grep -q '^last error: none$' || die "Telegram webhook reports an error (see above)"
+    fi
+  fi
+  for m in alerts backup deploy host; do kuma "$m" up finish; done
+  env_set FINISHED 1
+  say "finished. Uptime Kuma monitors should turn Up within 3 minutes. / เสร็จแล้ว"
+}
+
+cmd_pause() {
+  lock_env
+  refuse_during_restore
+  env_set ALERTS_PAUSED 1
+  compose up -d --force-recreate api alerts
+  if [ -s "$TH/secrets/telegram_bot_token" ]; then tools_run node dist/tools/telegram.mjs delete || log "pause: deleteWebhook failed"; fi
+  say "paused: no alerts, no new sign-ups, the bot says 'หยุดชั่วคราว'. Undo: thuammai resume"
+}
+cmd_resume() {
+  lock_env
+  refuse_during_restore
+  env_set ALERTS_PAUSED 0
+  compose up -d --force-recreate api alerts
+  if [ -s "$TH/secrets/telegram_bot_token" ] && [ "$(env_get FINISHED)" = 1 ]; then tools_run node dist/tools/telegram.mjs set || log "resume: setWebhook failed"; fi
+  say "resumed / กลับมาทำงานแล้ว"
+}
+
+# telegram token [--file <path>]: replace the bot token. Read from a file, a hidden prompt, or stdin
+# (e.g. `ssh vps thuammai telegram token < bottoken.txt`); checked with getMe before it is kept.
+cmd_telegram_token() {
+  local tok="" old u=""
+  lock_env
+  refuse_during_restore
+  case "${1:-}" in
+    --file) [ -n "${2:-}" ] || die "thuammai telegram token --file <path>"; tok="$(token_from_file "$2")" ;;
+    "")
+      if [ -t 0 ]; then
+        tok="$(ask_secret 'Telegram bot token, hidden / โทเค็นบอท (ไม่แสดงบนจอ): ')" || tok=""
+      else
+        IFS= read -r tok || true
+        tok="$(printf '%s' "$tok" | tr -d ' \r\t')"
+      fi
+      ;;
+    *) die "thuammai telegram token [--file <path>] — the token is read from stdin or a file, never from an argument" ;;
+  esac
+  [ -n "$tok" ] || die "no token given"
+  old="$(secret_get telegram_bot_token)"
+  secret_set telegram_bot_token "$tok"
+  tok=""
+  bot_check
+  case "$BOT_STATE" in
+    ok)
+      u="$BOT_USER"
+      env_set TELEGRAM_BOT_USERNAME "$u"
+      ;;
+    rejected)
+      secret_set telegram_bot_token "$old"
+      die "Telegram rejected this token — kept the previous one / Telegram ไม่รับโทเค็นนี้ — ใช้ของเดิมต่อ"
+      ;;
+    *)
+      # Could not check (network, Telegram down): the token the owner gave is kept, not thrown away,
+      # and so is TELEGRAM_BOT_USERNAME from the last good check (the next check replaces it).
+      log "warning: could not reach Telegram to check the new token — saved it anyway; run 'thuammai telegram token' again later to confirm / ติดต่อ Telegram ไม่ได้ — บันทึกโทเค็นไว้แล้ว"
+      ;;
+  esac
+  compose up -d --force-recreate api alerts
+  if [ "$(env_get FINISHED)" = 1 ] && [ "$(env_get ALERTS_PAUSED)" != 1 ]; then tools_run node dist/tools/telegram.mjs set || log "telegram token: setWebhook failed"; fi
+  if [ -n "$u" ]; then say "bot @$u saved. If it changed, set the GitHub variable TELEGRAM_BOT_USERNAME=$u"; else say "token saved (not checked with Telegram yet; TELEGRAM_BOT_USERNAME kept: $(env_get TELEGRAM_BOT_USERNAME))"; fi
+}
+
+# restart <db|api|alerts>: recreate one service under the ops lock, so it never races an update,
+# a backup or a restore that is using (or has stopped) the same containers.
+cmd_restart() {
+  case "${1:-}" in db | api | alerts) ;; *) die "thuammai restart <db|api|alerts>" ;; esac
+  lock_env
+  refuse_during_restore
+  compose up -d --force-recreate "$1"
+}
+
+cmd_status() {
+  local word ports last age
+  compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' || true
+  word="$(compose exec -T api node dist/tools/health.mjs --allow-paused 2>/dev/null | tail -n 1 || true)"
+  if [ "$word" = ok ]; then say "ok   api/status: $word"; else say "WARN api/status: ${word:-no answer}"; fi
+  if [ "$(env_get ALERTS_PAUSED)" = 1 ]; then say "WARN alerts are PAUSED (thuammai resume)"; fi
+  if [ -e "$RESTORE_MARK" ]; then say "WARN a restore did not finish (stage $(restore_stage)) — see run/restore-incomplete; old data back: $(restore_hint)"; fi
+  ports="$(docker ps --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Ports}}' | grep -E '0\.0\.0\.0:|\[::\]:|:::' || true)"
+  if [ -z "$ports" ]; then say "ok   no published port"; else say "WARN a port is published: $ports"; fi
+  last="$(newest "$TH/backups/daily" '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].dump')"
+  if [ -n "$last" ]; then
+    age=$((($(date +%s) - $(stat -c %Y "$TH/backups/daily/$last")) / 3600))
+    if [ "$age" -le 26 ]; then say "ok   last backup $last (${age}h ago)"; else say "WARN last backup $last is ${age}h old"; fi
+  else
+    say "WARN no backup yet"
+  fi
+  if [ -s "$TH/secrets/restic_repository" ]; then say "ok   off-site backup configured"; else say "WARN no off-site backup — losing the VPS loses every follower (thuammai offsite setup, or thuammai backup export)"; fi
+  if [ "$(env_get FINISHED)" = 1 ]; then say "ok   finished (caddy + webhook)"; else say "WARN not finished (thuammai finish)"; fi
+  say "info release $(cat "$TH/current/VERSION" 2>/dev/null || echo '?') ($(current_tag)), disk $(df -P / | awk 'NR == 2 { print $5 }') used"
+}
+
+cmd_kuma() {
+  local m v
+  lock_env
+  refuse_during_restore
+  for m in alerts backup deploy host; do
+    v="$(ask "$(kuma_prompt "$m" "Enter = keep")")" || v=""
+    [ -z "$v" ] || set_kuma "$m" "$v" 0
+  done
+  compose up -d --force-recreate alerts
+  for m in backup deploy host; do kuma "$m" up kuma_set; done
+  say "done — each monitor should turn Up (alerts within 1 minute)"
+}
+
+cmd_backup() {
+  case "${1:-now}" in
+    now) bash "$TH/current/bin/backup.sh" ;;
+    export)
+      local name rel stage out
+      lock_env
+      [ -s "$TH/secrets/export_passphrase" ] || die "secrets/export_passphrase is missing — run thuammai install"
+      name="$(date +%F)-export"
+      # Plaintext (stage, dump) and a half-written .enc are removed on any failure or interruption.
+      CLEANUP+=("$TH/backups/daily/$name.dump.tmp" "$TH/backups/daily/$name.dump")
+      rel="$(pg_backup daily "$name")" || die "backup failed"
+      stage="$(mktemp -d "$TH/exports/stage.XXXXXX")"
+      out="$TH/exports/thuammai-$(date -u +%Y%m%dT%H%M%SZ).tar.enc"
+      CLEANUP+=("$stage" "$out")
+      chmod 700 "$stage"
+      mkdir -p "$stage/data/config" "$stage/data/daily"
+      cp -p "$TH/.env" "$stage/data/config/.env"
+      cp -rp "$TH/secrets" "$stage/data/config/secrets"
+      cp -p "$TH/backups/$rel" "$stage/data/daily/"
+      (umask 077 && tar -C "$stage" -c data | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass "file:$TH/secrets/export_passphrase" -out "$out") || die "encrypting the export failed — nothing kept"
+      chmod 600 "$out"
+      rm -rf "$stage" "${TH:?}/backups/$rel"
+      CLEANUP=()
+      say "wrote $out — copy it off this machine, e.g. scp deploy@<vps>:$out ."
+      ;;
+    *) die "thuammai backup now|export" ;;
+  esac
+}
+
+cmd_offsite() {
+  case "${1:-}" in
+    setup)
+      local repo creds="" v
+      lock_env
+      repo="$(ask 'RESTIC_REPOSITORY (e.g. s3:https://<endpoint>/<bucket>/thuammai, sftp:user@host:/path): ')" || die "no repository"
+      # Credentials: a file the owner names (--env-file <path>) or hidden lines — never on screen or argv.
+      if [ "${2:-}" = --env-file ]; then
+        [ -f "${3:-}" ] || die "thuammai offsite setup --env-file <path>"
+        creds="$(cat "$3")"
+      else
+        creds="$(read_env_lines)"
+      fi
+      secret_set restic_repository "$repo"
+      secret_set restic_env "$creds"
+      creds=""
+      if [ ! -s "$TH/secrets/restic_password" ]; then
+        v="$(image_run node dist/tools/keys.mjs --random | tr -d '\n')" || v=""
+        [ -n "$v" ] || die "could not generate the restic password"
+        secret_set restic_password "$v"
+      fi
+      compose --profile tools run --rm --no-deps -T offsite init || die "restic init failed (repository address or credentials?)"
+      say "off-site backup is on from tonight. RESTIC_PASSWORD is now part of the recovery set: thuammai secrets show"
+      ;;
+    check) compose --profile tools run --rm --no-deps -T offsite check ;;
+    snapshots) compose --profile tools run --rm --no-deps -T offsite snapshots ;;
+    *) die "thuammai offsite setup [--env-file <path>] | check | snapshots" ;;
+  esac
+}
+
+# update retry <id|all>: forget that a release failed (run/bad-digests), e.g. after the cause was fixed
+# outside the image; the next update run deploys :stable again if it is that release.
+cmd_update_retry() {
+  local id="${1:-}" f="$TH/run/bad-digests" tmp
+  [ -n "$id" ] || die "thuammai update retry <release id|all>"
+  lock_env
+  mkdir -p "$TH/run"
+  touch "$f"
+  if [ "$id" = all ]; then
+    : >"$f"
+    say "cleared every bad release / ล้างรายการรุ่นที่เสียทั้งหมดแล้ว"
+    return 0
+  fi
+  [[ $id =~ ^[0-9a-f]{12}$ ]] || die "a release id is 12 hex characters (see run/bad-digests)"
+  grep -qxF "$id" "$f" || { say "$id is not marked bad"; return 0; }
+  tmp="$(mktemp "$TH/run/bad-digests.XXXXXX")"
+  CLEANUP+=("$tmp")
+  grep -vxF "$id" "$f" >"$tmp" || true
+  mv "$tmp" "$f"
+  say "$id may be deployed again on the next update run / รุ่น $id จะถูกลองใหม่ในรอบอัปเดตถัดไป"
+}
+
+# looks_like_home: $TH has our layout — the only case in which --purge may delete it.
+looks_like_home() { [ -d "$TH/releases" ] && [ -f "$TH/.env" ] && [ -e "$TH/current" ]; }
+
+# uninstall: stops only our compose project and removes only our crontab block; --purge (after the
+# word "purge") also deletes our volume, our local image tags (thuammai-local:<12 hex> only) and $TH.
+# The shared Caddyfile is left for the owner to edit.
+cmd_uninstall() {
+  local ans
+  lock_env
+  if [ "${1:-}" = --purge ]; then looks_like_home || die "$TH does not look like a thuammai home (no releases/, .env or current) — nothing done"; fi
+  compose down
+  cron_remove
+  rm -f "$HOME/bin/thuammai"
+  if [ "${1:-}" = --purge ]; then
+    ans="$(ask "Delete the database volume, backups and secrets in $TH for good? Type purge / ลบข้อมูลทั้งหมดถาวร? พิมพ์ purge: ")" || ans=""
+    [ "$ans" = purge ] || { say "kept data in $TH"; return 0; }
+    compose down -v
+    { docker image ls "$LOCAL_IMAGE" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true; } | grep -E "^$LOCAL_IMAGE:[0-9a-f]{12}\$" | xargs -r docker image rm >/dev/null 2>&1 || true
+    { docker image ls "$DB_LOCAL" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true; } | grep -E "^$DB_LOCAL:[0-9a-f]{12}\$" | xargs -r docker image rm >/dev/null 2>&1 || true
+    looks_like_home || die "$TH no longer looks like a thuammai home — not deleting it"
+    rm -rf "${TH:?}"
+  fi
+  say "stopped. Remove the '# thuammai — flood alerts API' block from the shared Caddyfile yourself."
+}
+
+main() {
+  local c="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$c" in
+    install) cmd_install "$@" ;;
+    status) cmd_status ;;
+    logs) compose logs --tail 30 api alerts db ;;
+    version) cat "$TH/current/VERSION" ;;
+    pause) cmd_pause ;;
+    resume) cmd_resume ;;
+    finish) cmd_finish ;;
+    caddy) [ "${1:-}" = add ] || die "thuammai caddy add"; cmd_caddy_add ;;
+    kuma) cmd_kuma ;;
+    telegram)
+      case "${1:-}" in
+        set | delete) tools_run node dist/tools/telegram.mjs "$1" ;;
+        token) shift; cmd_telegram_token "$@" ;;
+        *) die "thuammai telegram set|delete|token" ;;
+      esac
+      ;;
+    backup) cmd_backup "$@" ;;
+    update)
+      # update.sh takes the ops lock itself (and prints "busy" when another job holds it).
+      case "${1:-now}" in
+        now) bash "$TH/current/bin/update.sh" --now ;;
+        retry) shift; cmd_update_retry "$@" ;;
+        *) die "thuammai update now | retry <release id|all>" ;;
+      esac
+      ;;
+    rollback) bash "$TH/current/bin/update.sh" --rollback ;;
+    restore) bash "$TH/current/bin/restore.sh" "$@" ;;
+    restore-test) bash "$TH/current/bin/restore-test.sh" ;;
+    secrets) [ "${1:-}" = show ] || die "thuammai secrets show"; cmd_secrets_show ;;
+    offsite) cmd_offsite "$@" ;;
+    restart) cmd_restart "$@" ;;
+    cron) case "${1:-}" in install) cron_install ;; remove) cron_remove ;; *) die "thuammai cron install|remove" ;; esac ;;
+    uninstall) cmd_uninstall "$@" ;;
+    *)
+      usage
+      [ -z "$c" ] || exit 2
+      ;;
+  esac
+}
+main "$@"

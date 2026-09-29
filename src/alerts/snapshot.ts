@@ -71,3 +71,10 @@ export function inputAt(s: Snapshot, lat: number, lon: number): PointInput {
   }
   return input;
 }
+
+/** The snapshot kept in memory, re-checked against the current time before answering questions
+ *  between runs (spec §4.3 step 5): older than maxSnapshotAgeMin → unusable, reason 'old'. */
+export function refreshFreshness(s: Snapshot, now: Date): Snapshot {
+  if (!s.ok) return s;
+  return now.getTime() - Date.parse(s.gen) <= ALERT.maxSnapshotAgeMin * 60e3 ? s : { ...s, ok: false, reason: 'old' };
+}

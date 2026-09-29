@@ -20,17 +20,23 @@
     "pipeline": "tsx src/pipeline/main.ts",
     "pipeline:fixtures": "tsx src/pipeline/main.ts --fixtures tests/fixtures/snapshot-2026-09-28T1443 --now 2026-09-28T14:43:00+07:00 --out dist --state .cache/fixture-state.json --fresh-state",
     "evaluate": "tsx src/pipeline/evaluate.ts",
-    "alerts": "tsx src/alerts/main.ts",
     "worker:test": "vitest run tests/worker",
     "worker:check": "node worker/make-config.mjs --local && npx wrangler@4.143.0 deploy --dry-run --outdir .cache/worker -c worker/wrangler.jsonc",
-    "worker:migrate:local": "node worker/make-config.mjs --local && npx wrangler@4.143.0 d1 migrations apply thuammai-alerts --local -c worker/wrangler.jsonc"
+    "worker:migrate:local": "node worker/make-config.mjs --local && npx wrangler@4.143.0 d1 migrations apply thuammai-alerts --local -c worker/wrangler.jsonc",
+    "server:build": "node server/build.mjs",
+    "server:test": "vitest run tests/server",
+    "server:test:pg": "node -e \"if(!process.env.TEST_DATABASE_URL){console.error('TEST_DATABASE_URL is not set');process.exit(1)}\" && vitest run tests/server tests/alerts",
+    "server:perf": "vitest run tests/server/perf.test.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
+    "@electric-sql/pglite": "^0.5.8",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.19.0",
+    "@types/pg": "^8.23.1",
     "@types/web-push": "^3.6.4",
+    "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
     "maplibre-gl": "^6.11.2",
     "qrcode-generator": "^2.0.4",
@@ -38,9 +44,11 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
     "vite": "^8.3.1",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.2",
+    "yaml": "^2.9.1"
   },
   "dependencies": {
+    "pg": "^8.23.0",
     "web-push": "^3.6.7"
   }
 }

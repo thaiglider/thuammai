@@ -1,6 +1,6 @@
 import { fmtTime } from '../../core/time';
-import { browserPushDeps, disableAlerts, enableAlerts, scheduleSync, serviceWorkerGone, syncNow, type EnableResult, type SyncResult } from '../lib/alerts-client';
-import { ALERTS_PAUSED_TH, ALERTS_PRIVACY_TH, alertsCfg, alertsOn, FULL_WITH_TG_TH, loadAlerts, pushConfigured, telegramLink, TELEGRAM_LINK_TH, telegramOffered } from '../lib/alerts-state';
+import { browserPushDeps, disableAlerts, enableAlerts, scheduleSync, serviceWorkerGone, statusMonitor, syncNow, type EnableResult, type ServerStatus, type SyncResult } from '../lib/alerts-client';
+import { ALERTS_DOWN_TH, ALERTS_PAUSED_TH, ALERTS_PRIVACY_TH, alertsCfg, alertsOn, FULL_WITH_TG_TH, loadAlerts, pushConfigured, telegramLink, TELEGRAM_LINK_TH, telegramOffered } from '../lib/alerts-state';
 import { clear, h } from '../lib/dom';
 import { trapFocus } from '../lib/focus';
 import type { Place } from '../lib/places';
@@ -31,6 +31,31 @@ export const CLEARED_LOCAL_TH = 'ลบการตั้งค่าแจ้�
 export const enabledText = (n: number): string => `เปิดแจ้งเตือนแล้ว — ติดตาม ${n} จุด`;
 
 export interface AlertsViewCtx { kv: KV; base: string; shell: ShellRefs; getPlaces(): Place[] }
+
+let serverStatus: ServerStatus = 'on';
+let watching = false;
+/** F2-9: its own status line inside the "on" section — the subscription stays; nothing to delete. */
+function renderServerStatus(host: HTMLElement): void {
+  host.querySelector('[data-testid="alerts-server"]')?.remove();
+  const text = serverStatus === 'paused' ? ALERTS_PAUSED_TH : serverStatus === 'down' ? ALERTS_DOWN_TH : null;
+  if (text) host.append(h('p', { role: 'status', 'data-testid': 'alerts-server' }, text));
+}
+/** R13: only when alerts are on here and this build is configured — everyone else never asks. */
+function watchStatus(o: AlertsViewCtx): void {
+  if (watching) return;
+  const d = browserPushDeps(o.kv, o.base);
+  if (!alertsOn(o.kv) || !pushConfigured(d.cfg)) return;
+  watching = true;
+  const m = statusMonitor(d, (s) => {
+    serverStatus = s;
+    const home = document.querySelector<HTMLElement>('[data-testid="alerts"]');
+    if (home && home.dataset.mode === 'push' && alertsOn(o.kv)) renderServerStatus(home);
+  });
+  const check = () => { if (alertsOn(o.kv)) m.maybeCheck(); };
+  const idle = (globalThis as { requestIdleCallback?: (f: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+  if (idle) idle(check, { timeout: 3_000 }); else setTimeout(check, 1_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+}
 
 /** The confirm sheet (spec §6.1 step 1). `onYes` runs inside the tap, so the permission prompt
  *  that follows counts as a user gesture on iOS. */
@@ -83,6 +108,8 @@ export function mountAlerts(host: HTMLElement, o: AlertsViewCtx, mode: SectionMo
     host.append(
       h('p', { 'data-testid': 'alerts-status' }, enabledText(o.getPlaces().length)),
       h('p', { class: 'muted' }, 'เลิกรับแจ้งเตือนได้ที่เมนู'));
+    renderServerStatus(host);
+    watchStatus(o);
     // No service worker (e.g. swKill) → no push can arrive: never keep saying "on".
     void serviceWorkerGone(browserPushDeps(o.kv, o.base)).then((gone) => {
       if (gone && host.isConnected && host.dataset.mode === 'push' && alertsOn(o.kv)) mountAlerts(host, o, 'paused');
@@ -139,6 +166,7 @@ let retryWired = false;
 /** On page open while alerts are on: check the subscription, retry pending syncs when back
  *  online or visible again (spec §6.2). */
 export function onOpen(o: AlertsViewCtx): void {
+  watchStatus(o);
   const run = () => void syncNow(browserPushDeps(o.kv, o.base), o.getPlaces()).then((r) => { showSyncBanner(o.shell, r); redraw(o, r); });
   run();
   if (retryWired) return;

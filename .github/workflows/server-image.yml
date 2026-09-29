@@ -1,0 +1,87 @@
+name: server-image
+# Builds the VPS image (spec §9.1, R3, R5). The VPS pulls :stable every 15 minutes, runs a
+# pre-deploy backup, migrations and a health gate, and rolls back by itself.
+# Only a server-v* TAG builds and moves :stable (final review I4): a tag push, or a manual run started
+# FROM that tag (Actions → server-image → Run workflow → Use workflow from: Tags → server-v…, and the
+# same tag typed in the input). A run from a branch fails before anything is pushed. This cannot stop
+# someone with write access who edits this file on a branch — see the owner guide's risk section.
+# Actions are pinned by commit SHA (the version is in the comment).
+on:
+  push:
+    tags: ['server-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'the server-v… tag this run was started from (Use workflow from: Tags) — re-builds it and makes it :stable'
+        required: true
+permissions: {}
+concurrency:
+  group: server-image
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: only a server-v* tag is built and published
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          case "$REF" in
+            refs/tags/server-v*) ;;
+            *) echo "::error::only a server-v* tag is built and published (this run: $REF) — push a server-v* tag, or start this workflow from one (Use workflow from: Tags)"; exit 1 ;;
+          esac
+          if [ "$REF_TYPE" != tag ]; then echo "::error::$REF is not a tag"; exit 1; fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_TAG" != "${REF#refs/tags/}" ]; then
+            echo "::error::the tag input (${INPUT_TAG:-empty}) must be the tag this run was started from (${REF#refs/tags/})"; exit 1
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: the tag still exists on GitHub and points at the commit being built
+        run: |
+          out="$(git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
+          sha="$(printf '%s\n' "$out" | awk -v r="refs/tags/$TAG^{}" '$2 == r { print $1 }')"
+          [ -n "$sha" ] || sha="$(printf '%s\n' "$out" | awk -v r="refs/tags/$TAG" '$2 == r { print $1 }')"
+          if [ "$sha" != "$GITHUB_SHA" ]; then echo "::error::tag $TAG is missing on GitHub or moved (it points at ${sha:-nothing}; this run is $GITHUB_SHA)"; exit 1; fi
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      # The Cloudflare ranges used by CLIENT_IP_MODE=cloudflare are baked into the image (R12).
+      - run: node server/tools/fetch-cloudflare-ips.mjs
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: ${{ startsWith(github.ref, 'refs/tags/server-v') }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64
+          push: ${{ startsWith(github.ref, 'refs/tags/server-v') }}
+          provenance: false
+          build-args: |
+            VERSION=${{ env.TAG }}
+            REVISION=${{ github.sha }}
+          tags: |
+            ghcr.io/thaiglider/thuammai-server:${{ env.TAG }}
+            ghcr.io/thaiglider/thuammai-server:stable
+      - if: ${{ startsWith(github.ref, 'refs/tags/server-v') }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/thaiglider/thuammai-server
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
