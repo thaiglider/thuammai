@@ -1,5 +1,6 @@
 import { inThailand } from '../../core/geo';
-import { CANAL, RAIN_OTHER, RIVER, ROAD } from '../../core/thresholds';
+import { riverBank } from '../../core/station';
+import { CANAL, RAIN_OTHER, ROAD } from '../../core/thresholds';
 import { isTooFarInFuture, parseLocal, toIso07 } from '../../core/time';
 import type { Flag, RawObs } from '../../core/types';
 import { provinceAt, type StaticData } from '../static-data';
@@ -44,10 +45,15 @@ export function parseRiver(raw: any, now: Date, tidal: Set<string>): RawObs[] {
     if (v === undefined || !t) continue;
     const bankRaw = num(st.min_bank);
     const bank = bankRaw && bankRaw !== 0 ? bankRaw : undefined;
-    if (bank !== undefined && v > bank + RIVER.outOfRangeAboveBank) continue; // out_of_range: dropped
     const code = st.tele_station_oldcode || String(st.id);
     const flags: Flag[] = [];
     if (tidal.has(code)) flags.push('tidal');
+    if (bank !== undefined) {
+      // left/right banks only judge min_bank (spec 2026-10-01 §1.1); they are not published.
+      const rb = riverBank({ v: r2(v), b: bank, left: num(st.left_bank), right: num(st.right_bank) });
+      if (rb.drop) continue; // far over the bank: a broken sensor or datum
+      flags.push(...rb.flags);
+    }
     const sit = num(x.situation_level);
     out.push({
       id: `river:${code}`, kind: 'river', name: st.tele_station_name?.th ?? code,

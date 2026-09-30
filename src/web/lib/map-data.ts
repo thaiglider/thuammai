@@ -1,7 +1,7 @@
 import { inThailand } from '../../core/geo';
 import { HOSPITAL_NOTE_TH } from '../../core/advice';
 import { osmUrl, type HospitalItem } from '../../core/hospital';
-import { LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
+import { LEVEL_COLOR, LEVEL_TH, bankNoteTh, bankSuspectKind } from '../../core/labels';
 import { isLiveEvent } from '../../core/risk';
 import { fmtTime } from '../../core/time';
 import type { FloodEvent, Kind, Level, Observation, ProvinceGeo, Reporter } from '../../core/types';
@@ -173,7 +173,8 @@ export function thaiTextField(current: unknown): unknown[] | null {
 export function stationPopupLines(o: Observation, now: Date, grey: boolean): string[] {
   const when = o.held ? `ค้างจาก ${fmtTime(o.held.lastFreshAt)}` : `วัดเมื่อ ${relativeAge(o.t, now)} (${fmtTime(o.t)})`;
   const level = grey ? `${LEVEL_TH[o.level]} (ข้อมูลเก่า อาจไม่ตรงกับตอนนี้)` : LEVEL_TH[o.level];
-  return present([level, obsValueText(o), when, 'สสน. (ThaiWater)']);
+  const bank = o.kind === 'river' && o.level >= 3 ? bankSuspectKind(o.flags) : undefined;
+  return present([level, obsValueText(o), bank ? bankNoteTh(bank) : null, when, 'สสน. (ThaiWater)']);
 }
 
 /** Title first, then passability/depth, time and who reported it. */

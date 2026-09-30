@@ -1,5 +1,5 @@
 import { assessArea, districtOf } from '../core/area';
-import { isLiveEvent } from '../core/risk';
+import { isLiveEvent, isUrgentReport } from '../core/risk';
 import type { History } from '../core/history';
 import { THRESHOLDS_VERSION } from '../core/thresholds';
 import { toIso07 } from '../core/time';
@@ -73,9 +73,11 @@ export function buildOutputs(inp: PublishInput): Map<string, string> {
   // areas + pages
   const areaRows: (IndexRow & { top: string[]; n3: number; n4: number })[] = [];
   const provName = new Map(sd.provinces.map((p) => [p.code, p.th]));
+  // Provinces holding an urgent report — confirms a river-only 4 (spec 2026-10-01 §3). Districts get none.
+  const urgentProvs = new Set([...c.longdo, ...c.traffy].filter((e) => isUrgentReport(e, now)).map((e) => provinceAt(e.lat, e.lon, sd)));
   for (const p of sd.provinces) {
     const inArea = byProv.get(p.code)!.obs;
-    const area = assessArea(inArea);
+    const area = assessArea(inArea, { urgentReport: urgentProvs.has(p.code) });
     areaRows.push({ code: p.code, kind: 'province', name: p.th, level: area.level, N: area.N, n2: area.n2, n3: area.n3, n4: area.n4, top: area.top });
     files.set(`p/${p.code}.html`, renderAreaPage({
       code: p.code, kind: 'province', name: p.th, lat: p.lat, lon: p.lon, area,

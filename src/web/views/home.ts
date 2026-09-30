@@ -1,4 +1,4 @@
-import { LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
+import { LEVEL_COLOR, LEVEL_TH, placeLevelTh } from '../../core/labels';
 import { assessPoint } from '../../core/risk';
 import { fmtTime } from '../../core/time';
 import type { Level } from '../../core/types';
@@ -13,7 +13,7 @@ import { clear, h } from '../lib/dom';
 import type { Env } from '../lib/env';
 import { freshness, staleLine } from '../lib/freshness';
 import { shareCaption } from '../lib/format';
-import { coverageLine } from '../lib/coverage';
+import { coverageLine, nearestByKind, noNearLines, type NoNear } from '../lib/coverage';
 import { smooth, type HState } from '../lib/hysteresis';
 import { cleanName, exitFor, decodePlacesFromHash, encodePlaces, FULL_TH, importSummary, MAX_PLACES, mergePlaces, parseLatLonParams, parseLocationInput, placeKey, PRESET_NAMES, sanitizePlace, shareUrl, stripLatLon, type Place } from '../lib/places';
 import { buildIndex, search, type GazIndex, type GazRow } from '../lib/search';
@@ -108,8 +108,8 @@ function oldestAt(metaAt: string, olderAts: readonly (string | null)[]): string 
   return olderAts.reduce<string>((min, a) => (a && Date.parse(a) < Date.parse(min) ? a : min), metaAt);
 }
 
-function shareAllText(withShown: { p: Place; shownLevel: Level }[], generatedAt: string): string {
-  const lines = withShown.map(({ p, shownLevel }) => `${p.name}: ${LEVEL_TH[shownLevel]}`);
+function shareAllText(withShown: { p: Place; shownLevel: Level; noNear: NoNear | null }[], generatedAt: string): string {
+  const lines = withShown.map(({ p, shownLevel, noNear }) => `${p.name}: ${placeLevelTh(shownLevel, noNear !== null)}`);
   return `${lines.join('\n')}\n(ณ ${fmtTime(generatedAt)})`;
 }
 
@@ -229,13 +229,13 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
     const chartStations: { id: string; km: number }[] = [];
     for (const r of trendCandidates(a)) if (!seen.has(r.stationId!)) { seen.add(r.stationId!); chartStations.push({ id: r.stationId!, km: r.km }); }
     chartStations.length = Math.min(chartStations.length, 2);
-    return { p, a, olderAt: input.olderSnapshotAt, coverage: coverageLine(a, p.lat, p.lon, input.obs), input, trend, access, area, chartStations };
+    return { p, a, olderAt: input.olderSnapshotAt, input, trend, access, area, chartStations };
   }));
   if (gen !== contentGen) return;
 
   const hstates = getJson<Record<string, HState>>(ctx.kv, 'hyst', {});
   let rose = false;
-  const withShown = assessed.map(({ p, a, olderAt, coverage, input, trend, access, area, chartStations }) => {
+  const withShown = assessed.map(({ p, a, olderAt, input, trend, access, area, chartStations }) => {
     const key = placeKey(p);
     const prev = hstates[key] ?? null;
     const next = smooth(prev, a.level, ctx.meta.generatedAt);
@@ -245,7 +245,9 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
     hstates[key] = next;
     const shownLevel: Level = ctx.kv.persistent ? next.level : a.level;
     const situation = situationOf(shownLevel, a, trend, input.obs, now);
-    return { p, a, shownLevel, olderAt, coverage, input, trend, access, area, chartStations, situation };
+    const coverage = coverageLine(a, p.lat, p.lon, input.obs, shownLevel);
+    const noNear = noNearLines(shownLevel, a, shownLevel === 0 ? nearestByKind(p.lat, p.lon, input.obs, input.now) : []);
+    return { p, a, shownLevel, olderAt, coverage, noNear, input, trend, access, area, chartStations, situation };
   });
   setJson(ctx.kv, 'hyst', hstates);
   withShown.sort((x, y) => y.shownLevel - x.shownLevel);
@@ -253,10 +255,10 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
   if (rose) announceRise(ctx);
 
   const compact = withShown.length > 3;
-  for (const { p, a, shownLevel, olderAt, coverage, input, trend, access, area, chartStations, situation } of withShown) {
+  for (const { p, a, shownLevel, olderAt, coverage, noNear, input, trend, access, area, chartStations, situation } of withShown) {
     const key = placeKey(p);
     cards.append(renderCard({
-      place: p, a, shownLevel, generatedAt: olderAt ?? ctx.meta.generatedAt, now, grey: fr.grey || olderAt !== null, compact, coverage,
+      place: p, a, shownLevel, generatedAt: olderAt ?? ctx.meta.generatedAt, now, grey: fr.grey || olderAt !== null, compact, coverage, noNear,
       view: { trend, situation, access, area, vehicle: ctx.settings.vehicle, causes: causeLines(a, input.obs), chartStations },
       onChart: (host) => void import('./week').then((m) => m.mountWeekCharts(host, ctx.store, chartStations, now)).catch(() => {
         clear(host);
@@ -266,7 +268,7 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
       onHospitals: (host) => void mountHospitals(host, ctx.store, p.lat, p.lon, input),
       onClearExit: () => { savePlaces(ctx, currentPlaces(ctx).map((q) => (placeKey(q) === key ? { name: q.name, lat: q.lat, lon: q.lon } : q))); void renderHome(ctx); },
       // A card built from an older snapshot shares that older time, never the newer meta time.
-      onShare: () => void doShare(ctx, [p], shareCaption(p.name, shownLevel, olderAt ?? ctx.meta.generatedAt)),
+      onShare: () => void doShare(ctx, [p], shareCaption(p.name, shownLevel, olderAt ?? ctx.meta.generatedAt, noNear !== null)),
       onRemove: () => { savePlaces(ctx, currentPlaces(ctx).filter((q) => placeKey(q) !== key)); void renderHome(ctx); },
       onRename: (name) => { savePlaces(ctx, currentPlaces(ctx).map((q) => (placeKey(q) === key ? { ...q, name: cleanName(name) } : q))); void renderHome(ctx); },
     }));

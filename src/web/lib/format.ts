@@ -1,5 +1,5 @@
 import { distanceText } from '../../core/advice';
-import { LEVEL_TH } from '../../core/labels';
+import { bankNoteTh, placeLevelTh } from '../../core/labels';
 import type { Reason } from '../../core/risk';
 import type { Level, Observation } from '../../core/types';
 import { fmtTime } from '../../core/time';
@@ -46,12 +46,14 @@ function what(r: Reason): string {
 export function reasonLine(r: Reason, now: Date): string {
   const head = r.name ? `${r.name}: ` : '';
   const when = r.held ? `(ค้างจาก ${fmtTime(r.at)})` : `วัดเมื่อ ${relativeAge(r.at, now)} (${fmtTime(r.at)})`;
-  return `${head}${what(r)} · ห่าง ${distanceText(r.km)} · ${when} · ${sourceLabel(r)}`;
+  const b = r.params.bankSuspect;
+  const note = b === 1 || b === 2 ? ` · ${bankNoteTh(b)}` : '';
+  return `${head}${what(r)}${note} · ห่าง ${distanceText(r.km)} · ${when} · ${sourceLabel(r)}`;
 }
 
 /** Caption for sharing one place; the link follows it ("… ดูล่าสุด: <ลิงก์>", spec §9.2). */
-export function shareCaption(name: string, level: Level, generatedAt: string): string {
-  return `${name}: ${LEVEL_TH[level]} (ณ ${fmtTime(generatedAt)}) ดูล่าสุด:`;
+export function shareCaption(name: string, level: Level, generatedAt: string, noNear = false): string {
+  return `${name}: ${placeLevelTh(level, noNear)} (ณ ${fmtTime(generatedAt)}) ดูล่าสุด:`;
 }
 
 export function shareText(name: string, level: Level, generatedAt: string, url: string): string {

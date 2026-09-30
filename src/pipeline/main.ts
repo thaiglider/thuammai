@@ -15,7 +15,7 @@ import { fixtureFetcher, liveFetcher, type Fetcher } from './fetcher';
 import { buildOutputs } from './publish';
 import { pruneWeek, recordWeek, sanitizeWeek, seedWeek } from './week';
 import { loadSkill } from './skill-input';
-import { emptyState, loadState, saveState, type PipelineState } from './state';
+import { dropUnjudgedLastSeen, emptyState, loadState, saveState, type PipelineState } from './state';
 import { loadStaticData } from './static-data';
 
 export interface RunOpts {
@@ -86,6 +86,7 @@ export async function runPipeline(opts: RunOpts): Promise<RunResult> {
   appendSamples(st.history, raws);
   appendEvents(st.history, [...c.longdo, ...c.traffy]);
   compact(st.history, nowMs);
+  dropUnjudgedLastSeen(st);
   const { held, missing } = reinstateMissing(st, raws, nowMs);
   const obs = computeStatus([...raws, ...held], { now, history: st.history, historyH, missing });
   rememberLastSeen(st, raws, obs, now);

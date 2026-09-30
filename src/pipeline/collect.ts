@@ -95,13 +95,13 @@ export async function collectAll(
     parseTmd(await f.text(TMD_URL)).map((w) => ({ ...w, t: w.issued ?? undefined })));
 
   const hospitalsP = collectHospitals(f, st, now, sd);
-  const bmaP = collectBma(f, now, env); // in parallel with everything else
+  const bmaP = collectBma(f, now, env, sd); // in parallel with everything else
 
   const [tw5, longdo, traffy, forecast, tmdTimed, hospitals, bma] = await Promise.all([thaiwater(), longdoP, traffyP, forecastP, tmdP, hospitalsP, bmaP]);
 
   // (f) BMA relay: optional; any failure leaves ThaiWater alone. Merged BEFORE risk scoring, newer reading wins.
-  const road = mergeSource('road', tw5.road, bma.road, bma.health?.ok ?? false, sd, now);
-  const canal = mergeSource('canal', tw5.canal, bma.canal, bma.health?.ok ?? false, sd, now);
+  const road = mergeSource('road', tw5.road, bma.road, bma.health?.ok ?? false, now);
+  const canal = mergeSource('canal', tw5.canal, bma.canal, bma.health?.ok ?? false, now);
 
   const traffyWindowH = st.traffyWindowH ?? 0;
   traffy.health.windowH = traffyWindowH;
@@ -118,13 +118,13 @@ export async function collectAll(
   };
 }
 
-async function collectBma(f: Fetcher, now: Date, env: Record<string, string | undefined>) {
+async function collectBma(f: Fetcher, now: Date, env: Record<string, string | undefined>, sd: StaticData) {
   const health: SourceHealth = { id: 'bma', ok: false, count: 0, newest: null, lagMin: null };
   const out = { road: [] as RawObs[], canal: [] as RawObs[], health };
   const token = env.RELAY_READ_TOKEN?.trim();
   if (!token) return { ...out, health: null }; // not configured (fixtures, forks): no entry at all
   try {
-    const r = await fetchBma(f, token, env.RELAY_URL?.trim() || RELAY_URL_DEFAULT, now);
+    const r = await fetchBma(f, token, env.RELAY_URL?.trim() || RELAY_URL_DEFAULT, now, (lat, lon) => provinceAt(lat, lon, sd));
     out.road = r.road; out.canal = r.canal;
     health.ok = true;
     health.count = r.road.length + r.canal.length;
@@ -139,15 +139,15 @@ async function collectBma(f: Fetcher, now: Date, env: Record<string, string | un
 }
 
 /** Merge BMA into a ThaiWater road/canal source and re-measure its health on the merged list. BMA-only
- *  stations are added only inside Bangkok. If ThaiWater failed but enough FRESH BMA items exist, the
+ *  stations are added in every province (fetchBma already dropped those outside all provinces). If ThaiWater failed but enough FRESH BMA items exist, the
  *  source counts as ok (the ThaiWater error text is kept); carried ThaiWater items never count. */
-function mergeSource(id: 'road' | 'canal', r: Result<RawObs>, bmaItems: RawObs[], bmaOk: boolean, sd: StaticData, now: Date): Result<RawObs> {
-  const { items, bmaUsed } = mergeNewer(r.items, bmaItems, (o) => provinceAt(o.lat, o.lon, sd) === '10');
+function mergeSource(id: 'road' | 'canal', r: Result<RawObs>, bmaItems: RawObs[], bmaOk: boolean, now: Date): Result<RawObs> {
+  const { items, bmaUsed } = mergeNewer(r.items, bmaItems);
   const newest = items.map((o) => o.t).sort().at(-1) ?? null;
   const health: SourceHealth = { ...r.health, count: items.length, newest, lagMin: newest ? Math.round(ageMin(newest, now)) : null };
   if (bmaUsed > 0) { health.viaBma = true; health.twLagMin = r.health.lagMin; }
   if (!health.ok && bmaOk) {
-    const fresh = bmaItems.filter((o) => ageMin(o.t, now) <= FRESH_MIN[id] && provinceAt(o.lat, o.lon, sd) === '10').length;
+    const fresh = bmaItems.filter((o) => ageMin(o.t, now) <= FRESH_MIN[id]).length;
     if (fresh >= MIN_COUNT[id]) { health.ok = true; delete health.carriedFrom; }
   }
   return { items, health };

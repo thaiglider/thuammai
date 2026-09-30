@@ -1,4 +1,4 @@
-export const THRESHOLDS_VERSION = '2026-09-28.4';
+export const THRESHOLDS_VERSION = '2026-10-01.1';
 
 /** กทม. นนทบุรี ปทุมธานี สมุทรปราการ นครปฐม สมุทรสาคร — rules use the STATION's province. */
 export const BKK_METRO: readonly string[] = ['10', '11', '12', '13', '73', '74'];
@@ -19,7 +19,8 @@ export const FUTURE_TOLERANCE_MIN = 10;
 /** Thailand bounding box for coordinate sanity checks [minLon, minLat, maxLon, maxLat]. */
 export const TH_BBOX = [97.3, 5.6, 105.7, 20.5] as const;
 
-export const RIVER = { fb4: 0, fb3: 0.2, fb2: 0.5, outOfRangeAboveBank: 3 } as const;
+/** lrMaxDiff/bankMatch/farAbove/dropAbove: bank-quality rules of riverBank() (spec 2026-10-01 §1.1). */
+export const RIVER = { fb4: 0, fb3: 0.2, fb2: 0.5, lrMaxDiff: 5, bankMatch: 0.5, farAbove: 3, dropAbove: 8 } as const;
 export const CANAL = { fb4: 0, fb3: 0.3, fb2: 0.6, bankMin: 0, bankMax: 10 } as const;
 export const ROAD = { l4: 30, l3: 10, l2: 5, max: 200, stuckHours: 6 } as const;
 export const RAIN_BKK = { r1h3: 60, r3h3: 100, r1h2: 30, r3h2: 60 } as const;
@@ -53,7 +54,9 @@ export const ITIC_URGENT_H = 6;
 export const TRAFFY = { minTickets: 3, deepCm: 45, deepTickets: 2, dedupM: 50, dedupH: 2, maxPages: 5, pageSize: 100, pauseMs: 1000, deadlineMs: 90_000, maxWindowH: 6 } as const;
 export const CORROB = { independentKm: 0.3, familyKm: 3, drainageCanalKm: 3, drainageFb: 0.6 } as const;
 export const CONF = { highRoadKm: 0.5, highCanalKm: 1, highRiverKm: 1, mediumWaterKm: 3 } as const;
-export const AREA = { minShare: 0.15 } as const;
+/** Area rules. `riverOnly4`: without a road/canal at 4, an area needs this many river stations at 4
+ *  (or an urgent report inside it) on top of the share/pair rule to reach 4 (spec 2026-10-01 §3). */
+export const AREA = { minShare: 0.15, riverOnly4: 3 } as const;
 
 /** Minimum item counts below which a successful fetch is treated as a failure (outage masked as empty). */
 export const MIN_COUNT = { river: 300, rain: 1000, road: 100, canal: 100, dam: 20, longdo: 0, traffy: 0, forecast: 1, tmd: 0, hospitals: 1000, bma: 0 } as const;

@@ -16,8 +16,12 @@ const opt = (x: number | null | undefined): number | undefined => (typeof x === 
 
 export interface BmaResult { road: RawObs[]; canal: RawObs[] }
 
-/** GET the relay body; throws on HTTP/network errors (one attempt, 20 s) and on unusable data. */
-export async function fetchBma(f: Fetcher, token: string, url: string, now: Date): Promise<BmaResult> {
+/** Province code for a point, or null outside every province (sea, abroad). */
+export type ProvOf = (lat: number, lon: number) => string | null;
+
+/** GET the relay body; throws on HTTP/network errors (one attempt, 20 s) and on unusable data.
+ *  Each station's prov comes from `provOf`; a station outside every province is dropped. */
+export async function fetchBma(f: Fetcher, token: string, url: string, now: Date, provOf: ProvOf): Promise<BmaResult> {
   const body = (await f.json(url, { Authorization: `Bearer ${token}` }, { timeoutMs: 20_000, retries: 0 })) as Partial<RelayPayload> | null;
   const at = typeof body?.fetchedAt === 'string' ? Date.parse(body.fetchedAt) : NaN;
   if (!body || Number.isNaN(at)) throw new Error('relay has no usable data');
@@ -26,25 +30,29 @@ export async function fetchBma(f: Fetcher, token: string, url: string, now: Date
   if (ageMin < -FUTURE_MIN) throw new Error('relay data is from the future');
   const tOk = (t: string) => { const d = Date.parse(t); return !Number.isNaN(d) && (d - now.getTime()) / 60_000 <= FUTURE_MIN; };
   return {
-    road: (Array.isArray(body.road) ? body.road : []).flatMap((x) => (tOk(x.t) ? roadObs(x) : [])),
-    canal: (Array.isArray(body.canal) ? body.canal : []).flatMap((x) => (tOk(x.t) ? canalObs(x) : [])),
+    road: (Array.isArray(body.road) ? body.road : []).flatMap((x) => (tOk(x.t) ? roadObs(x, provOf) : [])),
+    canal: (Array.isArray(body.canal) ? body.canal : []).flatMap((x) => (tOk(x.t) ? canalObs(x, provOf) : [])),
   };
 }
 
-function roadObs(x: RelayRoad): RawObs[] {
+function roadObs(x: RelayRoad, provOf: ProvOf): RawObs[] {
   if (!(x.cm >= 0 && x.cm <= ROAD.max) || !inThailand(x.lat, x.lon)) return [];
+  const prov = provOf(x.lat, x.lon);
+  if (!prov) return [];
   return [{
-    id: `road:${x.code}`, kind: 'road', name: x.name, lat: r5(x.lat), lon: r5(x.lon), prov: '10',
-    amphoe: x.district?.replace(/^เขต\s*/, '') || undefined, t: x.t, v: r2(x.cm),
+    id: `road:${x.code}`, kind: 'road', name: x.name, lat: r5(x.lat), lon: r5(x.lon), prov,
+    amphoe: x.district?.replace(/^(เขต|อำเภอ)\s*/, '') || undefined, t: x.t, v: r2(x.cm),
   }];
 }
 
-function canalObs(x: RelayCanal): RawObs[] {
+function canalObs(x: RelayCanal, provOf: ProvOf): RawObs[] {
   if (!inThailand(x.lat, x.lon)) return [];
+  const prov = provOf(x.lat, x.lon);
+  if (!prov) return [];
   const banks = [opt(x.bankL), opt(x.bankR)].filter((b): b is number => b !== undefined);
   const cf = canalFields(banks.length ? Math.min(...banks) : undefined, opt(x.warn), opt(x.crit));
   return [{
-    id: `canal:${x.code}`, kind: 'canal', name: x.name, lat: r5(x.lat), lon: r5(x.lon), prov: '10',
+    id: `canal:${x.code}`, kind: 'canal', name: x.name, lat: r5(x.lat), lon: r5(x.lon), prov,
     t: x.t, v: r2(x.level), bank: cf.bank, bmaCrit: cf.bmaCrit, flags: cf.flags.length ? cf.flags : undefined,
   }];
 }
@@ -54,7 +62,7 @@ const VALIDITY_FLAGS = ['bank_invalid', 'bma_thresh_invalid'];
 /** Per id keep the newer reading (BMA on a tie). Where BMA has the station its name, bank and
  *  critical level always apply (so thresholds do not flap when ThaiWater catches up); ThaiWater
  *  keeps its prov/amphoe and contributes step5cm. BMA-only stations are added when `addOnly` allows
- *  (Bangkok this round). `bmaUsed` counts merged items that carry BMA data. */
+ *  (collect adds all of them — every province since Plan N B1). `bmaUsed` counts merged items that carry BMA data. */
 export function mergeNewer(tw: RawObs[], bma: RawObs[], addOnly: (o: RawObs) => boolean = () => true): { items: RawObs[]; bmaUsed: number } {
   const byId = new Map(tw.map((o) => [o.id, o]));
   let bmaUsed = 0;

@@ -43,6 +43,34 @@ export function baseLevel(o: RawObs & { r3h?: number }): Level {
   }
 }
 
+export type BankFlag = 'bank_suspect' | 'bank_low_side';
+const isNum = (x: number | undefined): x is number => typeof x === 'number' && Number.isFinite(x);
+
+/** Bank quality of one river reading (spec 2026-10-01 §1.1). `b` = min_bank (present, non-zero),
+ *  `left`/`right` = ThaiWater left_bank/right_bank. Differences are compared rounded to mm.
+ *  - more than dropAbove over b → drop (broken sensor or datum)
+ *  - farAbove or more over b, unless usable L/R say the water is below both banks → no flag (level 4)
+ *  - L/R unusable (missing, or more than lrMaxDiff from b) or b not within bankMatch of min(L,R) → bank_suspect
+ *  - confirmed bank and b ≤ v < max(L,R) → bank_low_side */
+export function riverBank({ v, b, left, right }: { v: number; b: number; left?: number; right?: number }): { flags: BankFlag[]; drop: boolean } {
+  const above = -freeboard(b, v);
+  if (above > RIVER.dropAbove) return { flags: [], drop: true };
+  const lrOk = isNum(left) && isNum(right)
+    && Math.abs(freeboard(left, b)) <= RIVER.lrMaxDiff && Math.abs(freeboard(right, b)) <= RIVER.lrMaxDiff;
+  const lo = lrOk ? Math.min(left, right) : NaN;
+  const hi = lrOk ? Math.max(left, right) : NaN;
+  if (above >= RIVER.farAbove && (!lrOk || freeboard(lo, v) <= 0)) return { flags: [], drop: false };
+  if (!lrOk || Math.abs(freeboard(lo, b)) > RIVER.bankMatch) return { flags: ['bank_suspect'], drop: false };
+  if (above >= 0 && freeboard(hi, v) > 0) return { flags: ['bank_low_side'], drop: false };
+  return { flags: [], drop: false };
+}
+
+/** A river station whose bank is unconfirmed or only overtopped on its low side tops out at 3 (§1.2). */
+const BANK_CAP = 3;
+function bankCapped(o: RawObs): boolean {
+  return o.kind === 'river' && !!o.flags?.some((f) => f === 'bank_suspect' || f === 'bank_low_side');
+}
+
 /** `missing`: ids that disappeared from the current feed (re-supplied from their last fresh
  *  reading) — always treated as stale so they can only ever be held, never computed afresh. */
 export interface StatusContext { now: Date; history: History; historyH: number; missing?: ReadonlySet<string> }
@@ -69,10 +97,12 @@ export function computeStatus(raws: RawObs[], ctx: StatusContext): Observation[]
     const o: Observation = { ...r, level: 0, flags };
     if (age > fresh || ctx.missing?.has(r.id)) {
       flags.push('stale');
-      const last = ctx.history.lastLevel[r.id];
+      // A tidal peak passes within hours, so a held tidal reading would not describe now (spec 2026-10-01 §2).
+      const last = flags.includes('tidal') ? undefined : ctx.history.lastLevel[r.id];
       if (last && last.level >= 3 && nowMs - Date.parse(last.t) <= HELD_MAX_H * 3600e3) {
-        o.level = last.level;
-        o.held = { level: last.level, lastFreshAt: last.t };
+        const held = (bankCapped(r) ? Math.min(last.level, BANK_CAP) : last.level) as Level;
+        o.level = held;
+        o.held = { level: held, lastFreshAt: last.t };
         flags.push('held');
       }
       attachHiAt(o, ctx.history, nowMs);
@@ -102,6 +132,7 @@ export function computeStatus(raws: RawObs[], ctx: StatusContext): Observation[]
     }
     let level = baseLevel(o);
     if (rulesOn && riseBonus(o)) level = Math.min(4, level + 1) as Level;
+    if (bankCapped(r)) level = Math.min(level, BANK_CAP) as Level;
     o.level = level;
     ctx.history.lastLevel[r.id] = { level, t: r.t };
     if (level >= 3 && isWaterKind(r.kind)) (ctx.history.highAt ??= {})[r.id] = r.t;

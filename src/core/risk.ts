@@ -1,4 +1,5 @@
 import { distKm, hasIndependentPair, nearest } from './geo';
+import { bankSuspectKind } from './labels';
 import { BKK_METRO, CONF, CORROB, DIST, EVENT_AGE_H, FORECAST, ITIC_URGENT_H, TRAFFY } from './thresholds';
 import { ageMin, isTooFarInFuture } from './time';
 import type { FloodEvent, ForecastPoint, Kind, Level, Observation, Reporter } from './types';
@@ -38,6 +39,12 @@ export function isLiveEvent(e: FloodEvent, now: Date): boolean {
   return now.getTime() - t <= EVENT_AGE_H[e.reporter] * 3600e3;
 }
 
+/** A report that can raise a point to 4 on its own: a live, impassable iTIC report younger than
+ *  ITIC_URGENT_H. Shared by `reportSignals` and the area rule (spec 2026-10-01 §3). */
+export function isUrgentReport(e: FloodEvent, now: Date): boolean {
+  return e.reporter === 'itic' && e.passable === false && ageMin(e.t, now) < ITIC_URGENT_H * 60 && isLiveEvent(e, now);
+}
+
 /** Hourly forecast amounts still ahead of `now`, or null when the forecast run is stale. */
 export function remainingForecastMm(f: ForecastPoint, now: Date): number[] | null {
   const elapsedMs = now.getTime() - Date.parse(f.start);
@@ -57,6 +64,8 @@ function obsReason(o: Observation, km: number, level: Level, family: Family, kin
   if ((o.kind === 'river' || o.kind === 'canal') && o.bank !== undefined) params.freeboardCm = Math.round((o.bank - o.v) * 100);
   if (o.slope3h !== undefined && o.kind !== 'road') params.slopeCmH = Math.round(o.slope3h * 100);
   if (o.kind === 'canal' && o.bmaCrit !== undefined && o.v >= o.bmaCrit) params.overBmaCrit = 1;
+  // The bank note is for stations at ≥3 (spec 2026-10-01 §1.3) — the station's level, not the reason's.
+  if (o.kind === 'river' && o.level >= 3) { const b = bankSuspectKind(o.flags); if (b) params.bankSuspect = b; }
   if (o.kind === 'road') { params.depthCm = o.v; if (o.flags?.includes('step5cm') && o.v >= 20) params.atLeast = 1; }
   if (o.kind === 'rain') { params.mm24 = o.v; if (o.r1h !== undefined) params.r1h = o.r1h; if (o.r3h !== undefined) params.r3h = o.r3h; }
   return {
@@ -87,7 +96,7 @@ function reportSignals(lat: number, lon: number, events: readonly FloodEvent[], 
   }
   for (const { item: e, km } of near('itic', DIST.longdoFar)) {
     const inner = km <= DIST.longdoNear;
-    const urgent = e.passable === false && ageMin(e.t, now) < ITIC_URGENT_H * 60;
+    const urgent = isUrgentReport(e, now);
     const level = (urgent ? 4 : 3) - (inner ? 0 : 1);
     out.push(evReason([e], km, clamp(level), 'longdo', inner));
   }

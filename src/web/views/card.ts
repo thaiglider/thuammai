@@ -3,11 +3,12 @@ import { accessLabel, accessLine, actionLines, areaLine, confidenceLine, headlin
 import { groupOf, type Situation } from '../../core/situation';
 import type { Vehicle } from '../../core/thresholds';
 import type { Trend } from '../../core/trend';
-import { LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
+import { LEVEL_COLOR, LEVEL_TH, placeLevelTh } from '../../core/labels';
 import type { Assessment } from '../../core/risk';
 import type { Level } from '../../core/types';
 import { h } from '../lib/dom';
 import { exitHref, mapHref } from '../lib/map-data';
+import type { NoNear } from '../lib/coverage';
 import { reasonLine } from '../lib/format';
 import { staleLine } from '../lib/freshness';
 import type { Place } from '../lib/places';
@@ -19,6 +20,8 @@ export interface CardView {
 export interface CardOpts {
   place: Place; a: Assessment; shownLevel: Level; generatedAt: string; now: Date; grey: boolean;
   onShare(): void; onRemove(): void; onRename(name: string): void; compact?: boolean; coverage?: string | null;
+  /** "ไม่มีสถานีใกล้" text for a level-0 place with a fresh water station nearby (noNearLines). */
+  noNear?: NoNear | null;
   view: CardView; onChart(host: HTMLElement): void; onHospitals(host: HTMLElement): void; onClearExit(): void;
 }
 
@@ -27,7 +30,9 @@ export const FAR_WITH_COVERAGE = 'ระดับนี้คิดจากห�
 export function renderCard(o: CardOpts): HTMLElement {
   const lvl = o.shownLevel;
   const color = LEVEL_COLOR[lvl];
-  const badge = h('span', { class: `badge${o.grey ? ' grey' : ''}`, style: `background:${color.bg};color:${color.fg}`, 'data-testid': 'card-level' }, LEVEL_TH[lvl]);
+  const noNear = lvl === 0 ? o.noNear ?? null : null;
+  const label = placeLevelTh(lvl, noNear !== null);
+  const badge = h('span', { class: `badge${o.grey ? ' grey' : ''}`, style: `background:${color.bg};color:${color.fg}`, 'data-testid': 'card-level' }, label);
   const stale = o.grey
     ? h('p', { class: 'muted', 'data-testid': 'card-stale' }, staleLine(o.generatedAt, o.now))
     : null;
@@ -37,7 +42,10 @@ export function renderCard(o: CardOpts): HTMLElement {
   // With a coverage line (which names the nearest station), the 'far' confidence sentence would repeat the
   // distance; keep its guidance without it. Every other confidence line (e.g. level 0 "ไม่ได้แปลว่าปลอดภัย") stays.
   const farDup = !!o.coverage && lvl > 0 && o.a.confidence === 'low' && o.a.coverage.water === 'far';
-  const conf = farDup ? FAR_WITH_COVERAGE : confidenceLine({ ...o.a, level: lvl });
+  const conf = noNear ? noNear.note : farDup ? FAR_WITH_COVERAGE : confidenceLine({ ...o.a, level: lvl });
+  const noNearEl = noNear ? h('div', { 'data-testid': 'card-nonear' },
+    h('ul', {}, ...noNear.items.map((t) => h('li', {}, t))),
+    h('p', { class: 'muted' }, noNear.foot)) : null;
   const group = groupOf(o.view.situation);
   const actions = actionLines(lvl, o.view.situation);
   const vehicle = vehicleLine(o.a.vehicleDepthCm);
@@ -58,8 +66,8 @@ export function renderCard(o: CardOpts): HTMLElement {
   const why = h('details', { 'data-testid': 'card-why' },
     h('summary', {}, 'ทำไม?'),
     h('ul', {}, ...o.a.reasons.slice(0, 3).map((r) => h('li', {}, reasonLine(r, o.now)))),
-    o.a.reasons.length === 0 ? h('p', { class: 'muted' }, 'ไม่มีสถานีหรือรายงานใกล้จุดนี้') : null,
-    o.view.chartStations.length === 0 ? h('p', { class: 'muted' }, 'ไม่มีสถานีวัดระดับน้ำใกล้จุดนี้ จึงไม่มีกราฟ') : null);
+    o.a.reasons.length === 0 ? h('p', { class: 'muted' }, 'ไม่มีสถานีหรือรายงานที่ใกล้พอจะใช้ประเมินจุดนี้') : null,
+    o.view.chartStations.length === 0 ? h('p', { class: 'muted' }, 'ไม่มีสถานีที่ใช้ประเมินจุดนี้ จึงไม่มีกราฟ') : null);
   // Compact mode (more than 3 places) keeps each card to a couple of lines, but the advice and the
   // reasons stay one tap away; from เตือนภัย (3) up the actions are never hidden.
   const folded = o.compact === true && lvl < 3;
@@ -80,7 +88,7 @@ export function renderCard(o: CardOpts): HTMLElement {
     const name = prompt('ตั้งชื่อจุดนี้', o.place.name);
     if (name !== null) o.onRename(name);
   };
-  const ariaLabel = `${o.place.name}: ${LEVEL_TH[lvl]}${o.grey ? ' (ข้อมูลเก่า อาจไม่ตรงกับตอนนี้)' : ''}`;
+  const ariaLabel = `${o.place.name}: ${label}${o.grey ? ' (ข้อมูลเก่า อาจไม่ตรงกับตอนนี้)' : ''}`;
   return h('article', { class: 'card', 'data-testid': 'card', 'aria-label': ariaLabel },
     h('h2', {}, o.place.name),
     badge,
@@ -90,6 +98,7 @@ export function renderCard(o: CardOpts): HTMLElement {
     trendEl,
     conf ? h('p', { class: 'muted', 'data-testid': 'card-confidence' }, conf) : null,
     o.coverage ? h('p', { class: 'muted', 'data-testid': 'card-coverage' }, o.coverage) : null,
+    noNearEl,
     folded ? null : facets,
     folded ? null : vehicleEl,
     folded ? null : causes,

@@ -4,7 +4,8 @@ export type Level = 0 | 1 | 2 | 3 | 4;
 export type Kind = 'river' | 'canal' | 'road' | 'rain' | 'dam';
 export type Flag =
   | 'stale' | 'held' | 'step5cm' | 'stuck' | 'erratic' | 'out_of_range'
-  | 'bank_invalid' | 'bma_thresh_invalid' | 'tidal' | 'backflow';
+  | 'bank_invalid' | 'bma_thresh_invalid' | 'tidal' | 'backflow'
+  | 'bank_suspect' | 'bank_low_side';
 
 /** A station reading after status computation (what we publish). */
 export interface Observation {

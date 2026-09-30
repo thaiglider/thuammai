@@ -20,6 +20,8 @@ export interface PipelineState {
   /** Last fresh raw reading of every station whose level was ≥3, so a station that vanishes
    *  from its feed can still be published as held (spec §4 "stale/หาย"). Optional for legacy states. */
   lastSeen?: Record<string, RawObs>;
+  /** Set once lastSeen has been cleared of river entries saved before bank verdicts existed (Plan N A1). */
+  lastSeenBankJudged?: boolean;
   /** Hourly evaluation snapshots for evaluate.yml (Plan C). Optional for legacy states. */
   evalLog?: EvalLog;
   /** Hourly 7-day water history for the chart (spec 2026-09-30 §4.1). Optional for legacy states. */
@@ -62,4 +64,17 @@ export async function loadState(path: string, siteUrl?: string, fetchImpl: typeo
 export function saveState(path: string, st: PipelineState): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(st));
+}
+
+/** Plan N A1 rollout: a river reading remembered in lastSeen before riverBank() existed carries no
+ *  bank verdict and no left/right banks to judge one, so a station that then vanished from the feed
+ *  would be held at 4 unflagged. Once per state, drop such entries whose last level is 4 (the
+ *  station simply is not held); entries saved afterwards have been judged by parseRiver. */
+export function dropUnjudgedLastSeen(st: PipelineState): void {
+  if (st.lastSeenBankJudged) return;
+  for (const [id, r] of Object.entries(st.lastSeen ?? {})) {
+    const judged = r.flags?.some((f) => f === 'bank_suspect' || f === 'bank_low_side');
+    if (r.kind === 'river' && !judged && st.history.lastLevel[id]?.level === 4) delete st.lastSeen![id];
+  }
+  st.lastSeenBankJudged = true;
 }

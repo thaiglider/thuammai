@@ -1,5 +1,5 @@
 import type { AreaLevel } from '../core/area';
-import { AREA_NOTE_TH, DISCLAIMER_TH, EMERGENCY, KIND_TH, LEVEL_COLOR, LEVEL_TH, NO_DATA_NOTE_TH } from '../core/labels';
+import { AREA_NOTE_TH, DISCLAIMER_TH, EMERGENCY, KIND_TH, LEVEL_COLOR, LEVEL_TH, NO_DATA_NOTE_TH, bankNoteTh, bankSuspectKind } from '../core/labels';
 import { DISPLAY } from '../core/thresholds';
 import { fmtDateTime, fmtTime } from '../core/time';
 import type { Level, Observation } from '../core/types';
@@ -18,6 +18,8 @@ export function stationLine(o: Observation): string {
   } else if (o.kind === 'canal' && o.bmaCrit !== undefined && o.v >= o.bmaCrit) {
     parts.push('น้ำสูงเกินเกณฑ์วิกฤตของ กทม.');
   }
+  const bank = o.kind === 'river' && o.level >= 3 ? bankSuspectKind(o.flags) : undefined;
+  if (bank) parts.push(bankNoteTh(bank));
   if (o.kind === 'road') parts.push(o.flags?.includes('step5cm') && o.v >= 20 ? 'น้ำบนถนน 20 ซม. ขึ้นไป' : `น้ำบนถนน ${o.v} ซม.`);
   if (o.kind === 'rain') parts.push(`ฝน 24 ชม. ${o.v} มม.`);
   if (o.kind === 'dam') parts.push(`น้ำในเขื่อน ${Math.round(o.v)}% ของความจุ`);
