@@ -6,6 +6,7 @@ import { DataStore, fetchLoader, SchemaMismatchError, type Meta } from './lib/da
 import { effectiveNow, freshness } from './lib/freshness';
 import { arriveIfMoved, departIfOldHost, movedBanner } from './lib/move-client';
 import { applySettings, loadSettings } from './lib/settings';
+import { showStaleBanner } from './lib/stale-banner';
 import { browserStorage } from './lib/storage';
 import { loadErrorBanner, loadPlaces, renderHome, renderPlacesWithoutData, warmCache, type AppCtx } from './views/home';
 import { renderMapTab } from './views/map';
@@ -101,6 +102,8 @@ async function boot(): Promise<void> {
     shell.freshness.textContent = fr.text;
     shell.freshness.className = `fresh ${fr.state}`;
     const ctx: AppCtx = { shell, store, kv, env, settings, meta: meta!, serverDate, now: () => effectiveNow(deviceNow(), serverDate, meta!.generatedAt), online: () => navigator.onLine, base };
+    // A feed can stop while the pipeline stays "ok" (lessons-learned §K): say so on home and map.
+    if (tab === 'home' || tab === 'map') showStaleBanner(shell.banners, meta!.sources, now, fr.state);
     try {
       if (tab === 'home') await renderHome(ctx);
       else if (tab === 'map') await renderMapTab(ctx);

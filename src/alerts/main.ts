@@ -1,5 +1,6 @@
 import { CAPS, LINE } from '../core/alert-config';
 import type { FollowState } from '../core/alert-rule';
+import { staleWaterSources } from '../core/source-watch';
 import { siteLink, tgAlertText } from '../core/tg-text';
 import { pointAnswerText, type Stored } from './answer';
 import { lineFor, sendLine } from './line';
@@ -9,6 +10,7 @@ import { capPlanned, evaluatePointsYielding, isTrendKind, keysToQuery, planFollo
 import { newPushRun, sendPush, type PushRun, type SendNotification, type Vapid } from './push';
 import { RepoError, type AlertRepo, type FollowRow, type PendingRow } from './repo';
 import type { Snapshot } from './snapshot';
+import { watchSources, type SourceWatchRepo } from './source-watch';
 import { sendTelegram, tgSender, type Clock, type TgSend } from './telegram';
 
 export interface AlertEnv {
@@ -21,6 +23,8 @@ export interface AlertEnv {
   LINE_CHANNEL_TOKEN?: string;
   /** '0' turns trend alerts (H4) off: no trend is evaluated and every place's trend run is cleared. Default on. */
   TREND_ALERTS?: string;
+  /** '0' turns the stale-source watch (owner alert in the admin chat) off. Default on. */
+  SOURCE_WATCH?: string;
 }
 export interface AlertDeps {
   repo: AlertRepo; env: AlertEnv;
@@ -33,6 +37,8 @@ export interface AlertDeps {
   stopping?(): boolean;
   /** LINE questions and pushes (phase 3C); absent → LINE off. */
   lineRepo?: LineRepo;
+  /** Stale-source watch state (source_watch); absent → the watch only counts `stale`. */
+  watchRepo?: SourceWatchRepo;
 }
 /** No new send after this long from the start of the run (spec §7.5): below the 10-minute
  *  snapshot cycle and the 10-minute stuck-run watchdog of the alerts process. */
@@ -183,6 +189,8 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
   }
   // Questions from the bot are answered every run, honestly, even when alerts stay silent (E11).
   // After SIGTERM nothing more is sent: the questions stay queued for the next process.
+  // The owner hears about stale sources once per new gen; never blocks or fails the run.
+  if (!sigterm) await watchSafe(d, snap, counts);
   halt();
   const bad = tg ? await answerPendingSafe(d, snap, ev.points, stored, tg, run, CAPS.tgPerRun - tgUsed, tgStopped || sigterm, counts) : null;
   if (run.timedOut) counts.send_deadline = 1;
@@ -195,6 +203,17 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
     return bad ?? failed(err, counts, 'run');
   }
   return bad ?? { event: 'run', counts, exitCode: 0 };
+}
+
+/** Stale-source watch (lessons-learned §K): `stale=<n>`; any failure is only `watch_err=1`. */
+async function watchSafe(d: AlertDeps, snap: Snapshot, counts: Counts): Promise<void> {
+  const now = d.now();
+  counts.stale = staleWaterSources(snap.sources, now).length;
+  try {
+    Object.assign(counts, await watchSources(d, snap.sources, now));
+  } catch {
+    counts.watch_err = 1;
+  }
 }
 
 /** Questions are answered after the state is written, so their failure must not lose the run's

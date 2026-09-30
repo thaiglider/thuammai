@@ -8,6 +8,7 @@ import { pgLineRepo } from '../alerts/line-repo-pg';
 import { pgAdvisoryLock } from '../alerts/lock';
 import { startAlerts } from '../alerts/main';
 import { pgRepo } from '../alerts/repo-pg';
+import { pgWatchRepo } from '../alerts/watch-repo-pg';
 import { heartbeat } from '../alerts/run-state';
 import { pgWakeClient, wakeListener } from '../alerts/wake';
 import { createPool, poolDb } from '../db/pg';
@@ -39,6 +40,7 @@ const alert: AlertDeps = {
   sendNotification: (sub, payload, opts) => webpush.sendNotification(sub, payload, opts),
   sleep,
   lineRepo: pgLineRepo(db),
+  watchRepo: pgWatchRepo(db),
 };
 const log = (event: Parameters<typeof logLine>[1], counts: Record<string, number>) => logLine('alerts', event, counts);
 const handle = startAlerts({

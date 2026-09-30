@@ -1,5 +1,6 @@
 import { AREA_NOTE_TH, DISCLAIMER_TH, EMERGENCY, LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
 import { SIGNAL_SETS, TRUTHS, type SkillFile } from '../../core/skill';
+import { WATER_SOURCE_TH } from '../../core/source-watch';
 import { BKK_METRO, DAM, FRESH_MIN, THRESHOLDS_VERSION } from '../../core/thresholds';
 import { fmtDateTime } from '../../core/time';
 import { ALERTS_PRIVACY_TH, alertsCfg, alertsOn, pushConfigured } from '../lib/alerts-state';
@@ -13,8 +14,8 @@ import { loadPlaces, type AppCtx } from './home';
 import { tabLink, type Tab } from './shell';
 
 const SOURCE_TH: Record<string, string> = {
-  river: 'ระดับน้ำแม่น้ำ — สสน. (ThaiWater)', rain: 'ฝน — สสน. (ThaiWater)', road: 'น้ำบนถนน กทม. — สสน. (ThaiWater)',
-  canal: 'ระดับน้ำคลอง กทม. — สสน. (ThaiWater)', dam: 'เขื่อน — สสน. (ThaiWater)', longdo: 'เหตุการณ์บนถนน — Longdo Traffic',
+  river: `${WATER_SOURCE_TH.river} — สสน. (ThaiWater)`, rain: `${WATER_SOURCE_TH.rain} — สสน. (ThaiWater)`, road: `${WATER_SOURCE_TH.road} — สสน. (ThaiWater)`,
+  canal: `${WATER_SOURCE_TH.canal} — สสน. (ThaiWater)`, dam: 'เขื่อน — สสน. (ThaiWater)', longdo: 'เหตุการณ์บนถนน — Longdo Traffic',
   traffy: 'ประชาชนแจ้ง — Traffy Fondue (ยังไม่ยืนยัน)', forecast: 'พยากรณ์ฝน — Open-Meteo', tmd: 'ประกาศเตือน — กรมอุตุนิยมวิทยา',
   hospitals: 'โรงพยาบาล (OSM)', bma: 'กทม. (relay)',
 };

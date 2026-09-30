@@ -6,6 +6,14 @@ export const BKK_METRO: readonly string[] = ['10', '11', '12', '13', '73', '74']
 /** Freshness limit in minutes per kind; older = stale; older than ×DROP_FACTOR = not published. */
 export const FRESH_MIN = { river: 180, rain: 180, road: 120, canal: 120, dam: 2880 } as const;
 export const DROP_FACTOR = 4;
+/** Stale-source watch (owner alert + web banner, 2026-09-30): a water source whose newest reading
+ *  is this many hours old or older is "stale" — never read by the risk rules. */
+export const STALE_SOURCE_H = 6;
+/** Hysteresis: a stale source counts as recovered (owner notice) only once its newest reading is
+ *  younger than this — stale at ≥6 h, recovered below 5 h, so a feed hovering near 6 h can't flap. */
+export const STALE_SOURCE_RECOVER_H = 5;
+/** The BMA relay must have failed this long before the owner hears about it. */
+export const RELAY_PROBLEM_MIN = 60;
 export const FUTURE_TOLERANCE_MIN = 10;
 
 /** Thailand bounding box for coordinate sanity checks [minLon, minLat, maxLon, maxLat]. */

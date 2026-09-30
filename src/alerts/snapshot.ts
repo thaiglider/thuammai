@@ -15,6 +15,8 @@ export interface Snapshot {
   forecast: ForecastFile | null;
   /** RiskInputs memoised per province set (many places share one). */
   inputs: Map<string, PointInput>;
+  /** meta.sources as published (stale-source watch); absent when meta could not be read. */
+  sources?: SourceHealth[];
 }
 
 /** Water sources without which "no signal" would read as level 1 (spec §5.1 step 2, ruling 4). */
@@ -32,10 +34,11 @@ export function loadSnapshot(dir: string, provinces: ProvinceGeo[], runnerNow: D
     if (!existsSync(p)) return null;
     try { return JSON.parse(readFileSync(p, 'utf8')) as T; } catch { return null; }
   };
-  const empty = { provinces, obs: new Map<string, ProvObsFile>(), events: null, forecast: null, inputs: new Map<string, PointInput>() };
+  const empty: Omit<Snapshot, 'gen' | 'ok' | 'reason'> = { provinces, obs: new Map<string, ProvObsFile>(), events: null, forecast: null, inputs: new Map<string, PointInput>() };
   const meta = read<{ generatedAt?: unknown; schema?: unknown; sources?: unknown }>('meta.json');
   if (!meta || typeof meta.generatedAt !== 'string' || !Array.isArray(meta.sources)) return { ...empty, gen: '', ok: false, reason: 'missing' };
   const gen = meta.generatedAt;
+  empty.sources = meta.sources as SourceHealth[];
   if (meta.schema !== SCHEMA) return { ...empty, gen, ok: false, reason: 'schema' };
   const obs = new Map<string, ProvObsFile>();
   for (const p of provinces) {
