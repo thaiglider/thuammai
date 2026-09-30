@@ -1,7 +1,8 @@
-import { inThailand } from '../../core/geo';
+import { distKm, inThailand } from '../../core/geo';
 import { cleanText } from '../../core/text';
+import { ACCESS } from '../../core/thresholds';
 
-export interface Place { name: string; lat: number; lon: number }
+export interface Place { name: string; lat: number; lon: number; exit?: { lat: number; lon: number } }
 export const MAX_NAME = 40;
 export const MAX_PLACES = 10;
 export const PRESET_NAMES = ['บ้าน', 'ที่ทำงาน', 'บ้านพ่อแม่', 'โรงเรียนลูก'] as const;
@@ -14,12 +15,35 @@ export function cleanName(s: string): string {
   return cleanText(s, MAX_NAME) || 'จุดที่บันทึก';
 }
 
+/** An exit (ปากซอย/ประตูหมู่บ้าน) for p, rounded; 'far' beyond ACCESS.exitMaxKm (spec §9.1). */
+export function exitFor(p: Pick<Place, 'lat' | 'lon'>, lat: number, lon: number): { lat: number; lon: number } | 'far' | 'outside' {
+  const e = { lat: r4(lat), lon: r4(lon) };
+  if (!inThailand(e.lat, e.lon)) return 'outside';
+  return distKm(p.lat, p.lon, e.lat, e.lon) <= ACCESS.exitMaxKm ? e : 'far';
+}
+
+const withExit = (p: Place, lat: unknown, lon: unknown): Place => {
+  if (typeof lat !== 'number' || typeof lon !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lon)) return p;
+  const e = exitFor(p, lat, lon);
+  return typeof e === 'object' ? { ...p, exit: e } : p;
+};
+
+/** A place read back from localStorage (untrusted JSON): null when unusable; a bad exit is dropped. */
+export function sanitizePlace(x: unknown): Place | null {
+  if (!x || typeof x !== 'object') return null;
+  const o = x as Record<string, unknown>;
+  if (typeof o.lat !== 'number' || typeof o.lon !== 'number' || !inThailand(o.lat, o.lon)) return null;
+  const p: Place = { name: cleanName(typeof o.name === 'string' ? o.name : ''), lat: o.lat, lon: o.lon };
+  const e = o.exit as Record<string, unknown> | undefined;
+  return e && typeof e === 'object' ? withExit(p, e.lat, e.lon) : p;
+}
+
 export const placeKey = (p: Place) => `${r4(p.lat).toFixed(4)},${r4(p.lon).toFixed(4)}`;
 
 /** Names are percent-encoded with "~" also escaped, so literal "~" and "|" are always separators. */
 export function encodePlaces(places: Place[]): string {
   return places.slice(0, MAX_PLACES)
-    .map((p) => `${encodeURIComponent(cleanName(p.name)).replace(/~/g, '%7E')}~${r4(p.lat)},${r4(p.lon)}`)
+    .map((p) => `${encodeURIComponent(cleanName(p.name)).replace(/~/g, '%7E')}~${r4(p.lat)},${r4(p.lon)}${p.exit ? `,${r4(p.exit.lat)},${r4(p.exit.lon)}` : ''}`)
     .join('|');
 }
 
@@ -31,14 +55,14 @@ function parseParts(parts: string[], decodeNames: boolean): Place[] {
     if (i < 0) continue;
     let name = part.slice(0, i);
     if (decodeNames) { try { name = decodeURIComponent(name); } catch { /* keep as is */ } }
-    const [a, b] = part.slice(i + 1).split(',');
+    const [a, b, c, d] = part.slice(i + 1).split(',');
     const lat = Number(a);
     const lon = Number(b);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !inThailand(lat, lon)) continue;
-    const p = { name: cleanName(name), lat: r4(lat), lon: r4(lon) };
+    const p: Place = { name: cleanName(name), lat: r4(lat), lon: r4(lon) };
     if (seen.has(placeKey(p))) continue;
     seen.add(placeKey(p));
-    out.push(p);
+    out.push(c !== undefined && d !== undefined ? withExit(p, Number(c), Number(d)) : p);
     if (out.length >= MAX_PLACES) break;
   }
   return out;

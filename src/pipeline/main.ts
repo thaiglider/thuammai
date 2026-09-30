@@ -12,6 +12,7 @@ import { collectAll, type Collected } from './collect';
 import { currentEvalLog, emptyEvalLog, pruneEvalLog, recordSnapshot } from './eval-log';
 import { fixtureFetcher, liveFetcher, type Fetcher } from './fetcher';
 import { buildOutputs } from './publish';
+import { pruneWeek, recordWeek, sanitizeWeek, seedWeek } from './week';
 import { loadSkill } from './skill-input';
 import { emptyState, loadState, saveState, type PipelineState } from './state';
 import { loadStaticData } from './static-data';
@@ -70,6 +71,10 @@ export async function runPipeline(opts: RunOpts): Promise<RunResult> {
   const { held, missing } = reinstateMissing(st, raws, nowMs);
   const obs = computeStatus([...raws, ...held], { now, history: st.history, historyH, missing });
   rememberLastSeen(st, raws, obs, now);
+  if (!st.week || typeof st.week !== 'object' || Array.isArray(st.week)) { st.week = {}; seedWeek(st.week, st.history); }
+  else st.week = sanitizeWeek(st.week);
+  recordWeek(st.week, obs);
+  pruneWeek(st.week, nowMs);
 
   // A malformed log, or one recorded under other thresholds, restarts (levels are rule-specific).
   st.evalLog = currentEvalLog(st.evalLog) ?? emptyEvalLog();
@@ -78,7 +83,7 @@ export async function runPipeline(opts: RunOpts): Promise<RunResult> {
 
   st.savedAt = now.toISOString();
   const skill = await loadSkill(opts.skill, opts.site);
-  const files = buildOutputs({ now, obs, collected: c, sd, history: st.history, historyH, state: st, skill });
+  const files = buildOutputs({ now, obs, collected: c, sd, history: st.history, historyH, state: st, week: st.week, skill });
   for (const sub of ['data', 'p']) rmSync(join(opts.out, sub), { recursive: true, force: true });
   for (const [rel, content] of files) {
     const full = join(opts.out, rel);

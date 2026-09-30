@@ -150,11 +150,13 @@ function about(ctx: AppCtx, main: HTMLElement): void {
   const s: Settings = { ...ctx.settings };
   const sizeBtns: { el: HTMLButtonElement; val: Settings['size'] }[] = [];
   const themeBtns: { el: HTMLButtonElement; val: Settings['theme'] }[] = [];
+  const vehBtns: { el: HTMLButtonElement; val: Settings['vehicle'] }[] = [];
   const syncPressed = () => {
     for (const { el, val } of sizeBtns) el.setAttribute('aria-pressed', String(s.size === val));
     for (const { el, val } of themeBtns) el.setAttribute('aria-pressed', String(s.theme === val));
+    for (const { el, val } of vehBtns) el.setAttribute('aria-pressed', String(s.vehicle === val));
   };
-  const set = (patch: Partial<Settings>) => { Object.assign(s, patch); saveSettings(ctx.kv, s); applySettings(document, s); syncPressed(); };
+  const set = (patch: Partial<Settings>) => { Object.assign(s, patch); Object.assign(ctx.settings, patch); saveSettings(ctx.kv, s); applySettings(document, s); syncPressed(); };
   const sizeA = h('button', { onclick: () => set({ size: 'a' }), 'aria-pressed': String(s.size === 'a') }, 'ก ปกติ');
   const sizeA2 = h('button', { onclick: () => set({ size: 'a2' }), style: 'font-size:1.15rem', 'aria-pressed': String(s.size === 'a2') }, 'ก ใหญ่');
   const sizeA3 = h('button', { onclick: () => set({ size: 'a3' }), style: 'font-size:1.3rem', 'data-testid': 'size-a3', 'aria-pressed': String(s.size === 'a3') }, 'ก ใหญ่มาก');
@@ -163,6 +165,8 @@ function about(ctx: AppCtx, main: HTMLElement): void {
   const themeLight = h('button', { onclick: () => set({ theme: 'light' }), 'aria-pressed': String(s.theme === 'light') }, 'สว่าง');
   const themeDark = h('button', { onclick: () => set({ theme: 'dark' }), 'aria-pressed': String(s.theme === 'dark') }, 'มืด');
   themeBtns.push({ el: themeAuto, val: 'auto' }, { el: themeLight, val: 'light' }, { el: themeDark, val: 'dark' });
+  const vehOpts: [Settings['vehicle'], string][] = [['none', 'ไม่ระบุ'], ['walk', 'เดิน'], ['motorcycle', 'มอเตอร์ไซค์'], ['car', 'รถเก๋ง'], ['pickup', 'กระบะ/SUV']];
+  for (const [val, label] of vehOpts) vehBtns.push({ el: h('button', { onclick: () => set({ vehicle: val }), 'aria-pressed': String(s.vehicle === val), 'data-testid': `vehicle-${val}` }, label), val });
   // Also when alerts are off in this build but this phone still says on: it shows the paused state (I3).
   const alertsMenu = pushConfigured(alertsCfg()) || alertsOn(ctx.kv) ? h('section', { 'data-testid': 'alerts-menu' }) : null;
   if (alertsMenu) {
@@ -178,13 +182,14 @@ function about(ctx: AppCtx, main: HTMLElement): void {
       h('h2', {}, 'ตั้งค่า'),
       h('div', { class: 'actions', role: 'group', 'aria-label': 'ขนาดตัวอักษร' }, sizeA, sizeA2, sizeA3),
       h('div', { class: 'actions', role: 'group', 'aria-label': 'ธีม' }, themeAuto, themeLight, themeDark),
+      h('p', {}, 'ฉันเดินทางด้วย (ใช้บอกว่าผ่านน้ำบนถนนได้ไหม)'),
+      h('div', { class: 'actions', role: 'group', 'aria-label': 'ยานพาหนะ' }, ...vehBtns.map((b) => b.el)),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.saveData, onchange: (e: Event) => set({ saveData: (e.target as HTMLInputElement).checked }) }), ' โหมดประหยัดเน็ต (ไม่โหลดแผนที่เอง)')),
     ...(alertsMenu ? [alertsMenu] : []),
     h('section', { 'data-testid': 'about' },
       h('h2', {}, 'เกี่ยวกับ'),
       h('p', {}, 'ท่วมไหม ทำโดยอาสาสมัคร ไม่ใช่หน่วยงานทางการ ใช้เพื่อประเมินสถานการณ์และเตรียมพร้อม — ทำตามประกาศของหน่วยงานเสมอ'),
       h('p', {}, ALERTS_PRIVACY_TH),
-      h('p', {}, h('a', { href: 'https://github.com/thaiglider/thuammai', rel: 'noopener' }, 'โค้ดของเว็บ (GitHub)')),
       h('h2', {}, 'เครดิตและสัญญาอนุญาต'),
       h('ul', {},
         h('li', {}, 'ข้อมูลน้ำและฝน: สถาบันสารสนเทศทรัพยากรน้ำ (สสน.) — ThaiWater'),

@@ -96,3 +96,21 @@ export const EVAL = {
 
 /** Tracking targets shown on the sources page (spec §7) — information, not a deploy gate. */
 export const SKILL_TARGET = { level: 3, precision: 0.5, hit: 0.6 } as const;
+
+/** Situation/trend display (spec 2026-09-30 §5–6) — never changes a station or point level. */
+export const TREND = { stableCmH: 1, fastCmH: 5 } as const;
+/** A station counts as "was high" (RECOVERY) this long after its last fresh level ≥3. */
+export const RECOVERY_H = 24;
+/** Exit/area facets (spec §8). */
+export const ACCESS = { sensorKm: 1.0, reportKm: 0.5, areaKm: 3, exitMaxKm: 3, waterCm: 5, blockedCm: 30 } as const;
+/** Hourly history kept for the 7-day chart (spec §4.1). */
+export const WEEK = { hours: 168 } as const;
+export type Vehicle = 'walk' | 'motorcycle' | 'car' | 'pickup';
+export const VEHICLES: readonly Vehicle[] = ['walk', 'motorcycle', 'car', 'pickup'];
+/** Road depth (cm) at which each way of travelling becomes "ระวัง" / "เลี่ยง" (spec §8.4, D3). */
+export const VEHICLE_CM: Record<Vehicle, { caution: number; avoid: number }> = {
+  walk: { caution: 10, avoid: 30 },
+  motorcycle: { caution: 5, avoid: 10 },
+  car: { caution: 10, avoid: 20 },
+  pickup: { caution: 20, avoid: 30 },
+};

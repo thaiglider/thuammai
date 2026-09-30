@@ -49,7 +49,10 @@ export function eventFeatures(events: readonly FloodEvent[], now: Date, grey: bo
 }
 
 export function placeFeatures(places: readonly Place[]): FC {
-  return { type: 'FeatureCollection', features: places.map((p) => point(p.lon, p.lat, { id: placeKey(p), kind: 'place', level: 0, c: PLACE_COLOR, r: 7 })) };
+  return { type: 'FeatureCollection', features: places.flatMap((p) => [
+    point(p.lon, p.lat, { id: placeKey(p), kind: 'place', level: 0, c: PLACE_COLOR, r: 7 }),
+    ...(p.exit ? [point(p.exit.lon, p.exit.lat, { id: `${placeKey(p)}#exit`, kind: 'exit', level: 0, c: PLACE_COLOR, r: 4 })] : []),
+  ]) };
 }
 
 /** Province codes whose bbox intersects the view [west, south, east, north]; null when more than `max`. */
@@ -119,6 +122,10 @@ export function shouldAutoLoadMap(settingSaveData: boolean, envSaveData: boolean
 
 export function mapHref(p: Place, hash: string): string {
   return `./?tab=map&lat=${p.lat}&lon=${p.lon}&z=15${hash}`;
+}
+
+export function exitHref(p: Place, hash: string): string {
+  return `./?tab=map&lat=${p.lat}&lon=${p.lon}&z=16&exit=${encodeURIComponent(placeKey(p))}${hash}`;
 }
 
 export interface StationRow { id: string; name: string; provTh: string; level: Level; value: string | null; t: string; held: boolean }

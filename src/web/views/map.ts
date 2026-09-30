@@ -8,9 +8,9 @@ import {
   EXTRA_LAYERS, eventFeatures, extrasKey, initialView, obsFeatures, pinCheck, PLACE_COLOR, placeFeatures, provincesInView,
   REPORT_COLOR, reportPopupLines, shouldAutoLoadMap, stationPopupLines, stationRows, type ExtraLayer, type StationRow,
 } from '../lib/map-data';
-import { FULL_TH, MAX_PLACES, placeKey } from '../lib/places';
+import { FULL_TH, MAX_PLACES, placeKey, type Place } from '../lib/places';
 import type { MapCanvas, SourceId } from '../map/canvas';
-import { addPlace, askPlaceName, currentPlaces, type AppCtx } from './home';
+import { addPlace, askPlaceName, currentPlaces, setExit, type AppCtx } from './home';
 import { tabHref } from './shell';
 
 /** Map JS + worker (~0.5 MB gzip, checked by tools/check-budget.mjs) plus style, glyphs and first tiles. */
@@ -44,6 +44,8 @@ interface MapState {
   // Chromium caches a failed dynamic import() for the page's lifetime, so retrying the same
   // import() call after one fails would just fail again — the retry button must reload instead.
   importFailed: boolean;
+  // Set when opened from a card's "ปักทางออก" (?exit=<placeKey>): the pin then sets this place's exit.
+  exitFor: Place | null;
 }
 
 // Kept across the periodic refresh (every 5 min, visibility/online events) so the map is built
@@ -63,7 +65,9 @@ function mount(ctx: AppCtx): MapState {
   clear(main);
   const canvasHost = h('div', { class: 'mapcanvas' });
   const cover = h('div', { class: 'mapcover', 'data-testid': 'map-cover' });
-  const pin = h('button', { class: 'primary pin', 'data-testid': 'pin', hidden: true }, '+ ปักหมุดที่นี่');
+  const exitKey = new URLSearchParams(location.search).get('exit');
+  const exitPlace = exitKey ? currentPlaces(ctx).find((q) => placeKey(q) === exitKey) ?? null : null;
+  const pin = h('button', { class: 'primary pin', 'data-testid': 'pin', hidden: true }, exitPlace ? `ตั้งเป็นทางออกของ ${exitPlace.name}` : '+ ปักหมุดที่นี่');
   const mapBox = h('div', { class: 'mapbox', 'data-testid': 'map', 'data-state': 'idle' },
     canvasHost, h('div', { class: 'crosshair', 'aria-hidden': 'true' }), pin, cover);
   const status = h('p', { role: 'status', 'data-testid': 'map-status' });
@@ -82,7 +86,7 @@ function mount(ctx: AppCtx): MapState {
     ctx, main, mapBox, canvasHost, cover, pin, status, legendNote, layerNote, list, layerInputs: [],
     canvas: null, problem: null, grey: false, dataAt: ctx.meta.generatedAt, flagged: [], obsById: new Map(), extraObsById: new Map(), extraGrey: false,
     eventsById: new Map(), reportsGrey: false, on: new Set(), extraSeq: 0, extraKey: null, reportsKey: null,
-    importFailed: false,
+    importFailed: false, exitFor: exitPlace,
   };
   s.layerInputs = EXTRA_LAYERS.map((l) => h('input', {
     type: 'checkbox', 'data-testid': `layer-${l.id}`, onchange: (e: Event) => toggleLayer(s, l.id, (e.target as HTMLInputElement).checked),
@@ -93,9 +97,20 @@ function mount(ctx: AppCtx): MapState {
     layerNote);
   syncLayerInputs(s);
   pin.addEventListener('click', () => pinHere(s));
+  const exitGps = exitPlace && ctx.env.canGeolocate ? h('button', { 'data-testid': 'exit-gps', onclick: () => {
+    if (!confirm('ใช้ตำแหน่งปัจจุบันของเครื่องเป็นทางออก? ตำแหน่งจะเก็บในเครื่องนี้เท่านั้น')) return;
+    status.textContent = 'กำลังหาตำแหน่ง…';
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { status.textContent = ''; applyExit(s, Math.round(pos.coords.latitude * 1e4) / 1e4, Math.round(pos.coords.longitude * 1e4) / 1e4); },
+      () => { status.textContent = 'หาตำแหน่งไม่ได้ — เลื่อนแผนที่แล้วแตะปุ่มด้านล่างแทน'; },
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 });
+  } }, 'ใช้ตำแหน่งปัจจุบันเป็นทางออก') : null;
   main.append(
     h('h1', {}, 'แผนที่'),
-    h('p', { class: 'muted' }, 'เลื่อนแผนที่ให้วงกลมกลางจออยู่ตรงจุดที่ต้องการ แล้วแตะ "+ ปักหมุดที่นี่" เพื่อเพิ่มจุดติดตาม · แตะจุดสีเพื่อดูรายละเอียดสถานี'),
+    h('p', { class: 'muted' }, exitPlace
+      ? 'เลื่อนแผนที่ให้วงกลมกลางจออยู่ที่ปากซอยหรือประตูหมู่บ้านที่ใช้ออก (ไม่เกิน 3 กม. จากจุด) แล้วแตะปุ่มด้านล่าง'
+      : 'เลื่อนแผนที่ให้วงกลมกลางจออยู่ตรงจุดที่ต้องการ แล้วแตะ "+ ปักหมุดที่นี่" เพื่อเพิ่มจุดติดตาม · แตะจุดสีเพื่อดูรายละเอียดสถานี'),
+    ...(exitGps ? [exitGps] : []),
     legend, mapBox, status, layers, list);
   return s;
 }
@@ -329,6 +344,11 @@ function popupFor(s: MapState, source: SourceId, id: string): HTMLElement | null
     return h('div', { class: 'popup', 'data-testid': 'map-popup' }, h('strong', {}, title ?? ''), ...rest.map((t) => h('div', {}, t)));
   }
   if (source === 'places') {
+    if (id.endsWith('#exit')) {
+      const ep = currentPlaces(s.ctx).find((q) => placeKey(q) === id.slice(0, -5));
+      if (!ep) return null;
+      return h('div', { class: 'popup', 'data-testid': 'map-popup' }, h('strong', {}, `ทางออก: ${ep.name}`));
+    }
     const p = currentPlaces(s.ctx).find((q) => placeKey(q) === id);
     if (!p) return null;
     return h('div', { class: 'popup', 'data-testid': 'map-popup' }, h('strong', {}, p.name), h('div', {}, h('a', { href: tabHref('home') }, 'ดูระดับความเสี่ยงของจุดนี้')));
@@ -341,6 +361,14 @@ function popupFor(s: MapState, source: SourceId, id: string): HTMLElement | null
   return h('div', { class: 'popup', 'data-testid': 'map-popup' }, h('strong', {}, o.name), ...stationPopupLines(o, now, grey).map((t) => h('div', {}, t)));
 }
 
+function applyExit(s: MapState, lat: number, lon: number): void {
+  const r = setExit(s.ctx, placeKey(s.exitFor!), lat, lon);
+  if (r === 'far') { s.status.textContent = 'ทางออกต้องอยู่ห่างจากจุดไม่เกิน 3 กม.'; return; }
+  if (r === 'outside') { s.status.textContent = 'ตำแหน่งนี้อยู่นอกประเทศไทย — เลื่อนแผนที่แล้วลองใหม่'; return; }
+  if (r === 'missing') { s.status.textContent = 'ไม่พบจุดนี้แล้ว — กลับไปหน้าจุดของฉัน'; return; }
+  location.href = tabHref('home');
+}
+
 function pinHere(s: MapState): void {
   if (!s.canvas) return;
   const c = s.canvas.center();
@@ -351,6 +379,10 @@ function pinHere(s: MapState): void {
   }
   if (p === 'outside') {
     s.status.textContent = 'ตำแหน่งนี้อยู่นอกประเทศไทย — เลื่อนแผนที่แล้วลองใหม่';
+    return;
+  }
+  if (s.exitFor) {
+    applyExit(s, p.lat, p.lon);
     return;
   }
   // Checked up front so a full list never bothers the user with the naming prompt first.

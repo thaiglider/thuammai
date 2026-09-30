@@ -1,37 +1,26 @@
 import { assessArea, districtOf } from '../core/area';
 import { isLiveEvent } from '../core/risk';
-import type { History, Sample } from '../core/history';
-import { HISTORY, THRESHOLDS_VERSION } from '../core/thresholds';
+import type { History } from '../core/history';
+import { THRESHOLDS_VERSION } from '../core/thresholds';
 import { toIso07 } from '../core/time';
 import { SCHEMA, type Observation, type Rain0 } from '../core/types';
+import type { WeekStore } from '../core/week';
 import type { Collected } from './collect';
 import { renderAreaPage, renderIndex, type IndexRow, type UpstreamRow } from './render';
 import type { PipelineState } from './state';
 import type { StaticData } from './static-data';
+import { weekOutputs } from './week';
 
 export interface PublishInput {
   now: Date; obs: Observation[]; collected: Collected; sd: StaticData;
   history: History; historyH: number; state: PipelineState;
+  /** Hourly 7-day water history; one data/week/* file is published per station with a series. */
+  week: WeekStore;
   /** Serialized, validated skill.json (see loadSkill); omitted from the output when null/undefined. */
   skill?: string | null;
 }
 
 const CHAIN_PROVS = new Set(['60', '18', '17', '15', '14', '12', '10']);
-
-export interface SlotSeries { t0: number; step: number; v: (number | null)[] }
-
-export function toSlots(s: readonly Sample[]): SlotSeries {
-  const slotMs = HISTORY.slotMin * 60e3;
-  const k0 = Math.floor(s[0]!.t / slotMs);
-  const v: (number | null)[] = [];
-  for (const x of s) {
-    const i = Math.floor(x.t / slotMs) - k0;
-    if (i < 0) continue; // samples are appended in time order; ignore anything out of order
-    while (v.length < i) v.push(null);
-    v[i] = x.v;
-  }
-  return { t0: (k0 * slotMs) / 1000, step: slotMs / 1000, v };
-}
 
 export function buildOutputs(inp: PublishInput): Map<string, string> {
   const { now, obs, collected: c, sd } = inp;
@@ -96,17 +85,7 @@ export function buildOutputs(inp: PublishInput): Map<string, string> {
   put('data/areas.json', { ...head, areas: areaRows });
   files.set('p/index.html', renderIndex(areaRows, gen));
 
-  // history for charts: river/canal/road stations at level ≥2 (or held) only, as 30-min slots
-  // { t0: epochSec of the first slot, step: 1800, v: last value per slot, null for gaps }.
-  for (const [prov, b] of byProv) {
-    const series: Record<string, SlotSeries> = {};
-    for (const o of b.obs) {
-      if (o.kind === 'rain' || o.kind === 'dam' || (o.level < 2 && !o.held)) continue;
-      const s = inp.history.series[o.id];
-      if (s?.length) series[o.id] = toSlots(s);
-    }
-    put(`data/history/${prov}.json`, { ...head, series });
-  }
+  for (const [path, body] of weekOutputs(inp.week, obs, head)) files.set(path, body);
 
   if (inp.skill) files.set('data/skill.json', inp.skill);
   put('data/meta.json', { ...head, historyH: Math.round(inp.historyH * 10) / 10, sources: c.health, tmd: c.tmd, swKill: false });

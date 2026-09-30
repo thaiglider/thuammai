@@ -26,13 +26,14 @@ export interface Observation {
   r1h?: number;          // rain: mm last hour
   r3h?: number;          // rain: mm last 3 h (from history)
   slope3h?: number;      // river/canal m/h, road cm/h (regression over 3 h)
+  hiAt?: string;         // river/canal/road: last fresh reading time at level ≥3, within RECOVERY_H (spec 2026-09-30 §4)
   level: Level;          // final station level (base + rise, or held)
   held?: { level: Level; lastFreshAt: string };
   flags?: Flag[];
 }
 
 /** Parsed reading before status computation. */
-export type RawObs = Omit<Observation, 'level' | 'held' | 'r3h' | 'slope3h'>;
+export type RawObs = Omit<Observation, 'level' | 'held' | 'r3h' | 'slope3h' | 'hiAt'>;
 
 export type Reporter = 'highway' | 'itic' | 'public' | 'traffy';
 

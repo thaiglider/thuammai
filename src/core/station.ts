@@ -1,7 +1,8 @@
 import type { History } from './history';
 import { isErratic, isStuck, r3h, removeDropouts, slope } from './rise';
-import { BKK_METRO, CANAL, DAM, DROP_FACTOR, FRESH_MIN, HELD_MAX_H, HISTORY, RAIN_BKK, RAIN_OTHER, RISE, RIVER, ROAD } from './thresholds';
+import { BKK_METRO, CANAL, DAM, DROP_FACTOR, FRESH_MIN, HELD_MAX_H, HISTORY, RAIN_BKK, RAIN_OTHER, RECOVERY_H, RISE, RIVER, ROAD } from './thresholds';
 import { ageMin } from './time';
+import { isWaterKind } from './trend';
 import type { Flag, Level, Observation, RawObs } from './types';
 
 /** Freeboard in metres rounded to mm so that e.g. 5 − 4.8 compares as exactly 0.2. */
@@ -74,6 +75,7 @@ export function computeStatus(raws: RawObs[], ctx: StatusContext): Observation[]
         o.held = { level: last.level, lastFreshAt: last.t };
         flags.push('held');
       }
+      attachHiAt(o, ctx.history, nowMs);
       out.push(tidy(o));
       continue;
     }
@@ -102,9 +104,17 @@ export function computeStatus(raws: RawObs[], ctx: StatusContext): Observation[]
     if (rulesOn && riseBonus(o)) level = Math.min(4, level + 1) as Level;
     o.level = level;
     ctx.history.lastLevel[r.id] = { level, t: r.t };
+    if (level >= 3 && isWaterKind(r.kind)) (ctx.history.highAt ??= {})[r.id] = r.t;
+    attachHiAt(o, ctx.history, nowMs);
     out.push(tidy(o));
   }
   return out;
+}
+
+/** Publish when the station was last at ≥3 on a fresh reading, if within RECOVERY_H. */
+function attachHiAt(o: Observation, history: History, nowMs: number): void {
+  const hi = history.highAt?.[o.id];
+  if (hi !== undefined && isWaterKind(o.kind) && nowMs - Date.parse(hi) <= RECOVERY_H * 3600e3) o.hiAt = hi;
 }
 
 function tidy(o: Observation): Observation {

@@ -1,5 +1,5 @@
 import type { Sample } from './rise';
-import { BKK_METRO, HISTORY } from './thresholds';
+import { BKK_METRO, HISTORY, RECOVERY_H } from './thresholds';
 import type { FloodEvent, Level, RawObs, Reporter } from './types';
 
 export type { Sample } from './rise';
@@ -9,6 +9,7 @@ export interface History {
   series: Record<string, Sample[]>;
   lastLevel: Record<string, { level: Level; t: string }>;
   events: CompactEvent[];
+  highAt?: Record<string, string>;
 }
 
 const H = 3600e3;
@@ -55,6 +56,10 @@ export function compact(h: History, nowMs: number): void {
     }
     if (out.length) h.series[id] = out;
     else delete h.series[id];
+  }
+  if (h.highAt) {
+    const hiFrom = nowMs - RECOVERY_H * H;
+    for (const [id, t] of Object.entries(h.highAt)) if (Date.parse(t) < hiFrom) delete h.highAt[id];
   }
   h.events = h.events.filter((e) => e.t >= keepFrom);
   for (const [id, l] of Object.entries(h.lastLevel)) if (Date.parse(l.t) < keepFrom) delete h.lastLevel[id];

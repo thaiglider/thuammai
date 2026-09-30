@@ -2,7 +2,10 @@ import { LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
 import { assessPoint } from '../../core/risk';
 import { fmtTime } from '../../core/time';
 import type { Level } from '../../core/types';
-import { NO_OFFICIAL_ORDER } from '../../core/advice';
+import { accessAt, areaAround } from '../../core/access';
+import { causeLines, NO_OFFICIAL_ORDER } from '../../core/advice';
+import { situationOf } from '../../core/situation';
+import { pointTrend, trendCandidates } from '../../core/trend';
 import { distKm, inThailand } from '../../core/geo';
 import { alertsCfg, alertsMode, alertsOn, alertsPausedByBuild, browserPushGlobals, GPS_CONFIRM_ALERTS_TH, GPS_CONFIRM_TH } from '../lib/alerts-state';
 import type { AreaRow, DataStore, Meta } from '../lib/data';
@@ -12,7 +15,7 @@ import { freshness, staleLine } from '../lib/freshness';
 import { shareCaption } from '../lib/format';
 import { coverageLine } from '../lib/coverage';
 import { smooth, type HState } from '../lib/hysteresis';
-import { cleanName, decodePlacesFromHash, encodePlaces, FULL_TH, importSummary, MAX_PLACES, mergePlaces, parseLatLonParams, parseLocationInput, placeKey, PRESET_NAMES, shareUrl, stripLatLon, type Place } from '../lib/places';
+import { cleanName, exitFor, decodePlacesFromHash, encodePlaces, FULL_TH, importSummary, MAX_PLACES, mergePlaces, parseLatLonParams, parseLocationInput, placeKey, PRESET_NAMES, sanitizePlace, shareUrl, stripLatLon, type Place } from '../lib/places';
 import { buildIndex, search, type GazIndex, type GazRow } from '../lib/search';
 import type { Settings } from '../lib/settings';
 import { getJson, setJson, type KV } from '../lib/storage';
@@ -45,8 +48,8 @@ function gazetteer(ctx: AppCtx): Promise<GazIndex | null> {
 }
 
 export function loadPlaces(kv: KV): Place[] {
-  const stored = getJson<Place[]>(kv, 'places', []);
-  return Array.isArray(stored) ? stored.filter((p) => p && typeof p.lat === 'number' && typeof p.lon === 'number') : [];
+  const stored = getJson<unknown[]>(kv, 'places', []);
+  return Array.isArray(stored) ? stored.map(sanitizePlace).filter((p): p is Place => p !== null) : [];
 }
 
 export function currentPlaces(ctx: AppCtx): Place[] {
@@ -83,6 +86,16 @@ export function addPlace(ctx: AppCtx, p: Place): 'added' | 'dup' | 'full' {
   if (places.length >= MAX_PLACES) return 'full';
   savePlaces(ctx, mergePlaces(places, [p]));
   return 'added';
+}
+
+export function setExit(ctx: AppCtx, key: string, lat: number, lon: number): 'set' | 'far' | 'outside' | 'missing' {
+  const places = currentPlaces(ctx);
+  const p = places.find((q) => placeKey(q) === key);
+  if (!p) return 'missing';
+  const e = exitFor(p, lat, lon);
+  if (typeof e !== 'object') return e;
+  savePlaces(ctx, places.map((q) => (q === p ? { ...q, exit: e } : q)));
+  return 'set';
 }
 
 function topAreas(areas: AreaRow[]): AreaRow[] {
@@ -207,13 +220,21 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
   const assessed = await Promise.all(places.map(async (p) => {
     const input = await ctx.store.inputFor(p.lat, p.lon, now);
     const a = assessPoint(p.lat, p.lon, input);
-    return { p, a, olderAt: input.olderSnapshotAt, coverage: coverageLine(a, p.lat, p.lon, input.obs) };
+    const trend = pointTrend(a, input.obs, input.now);
+    const exit = p.exit;
+    const access = accessAt(exit?.lat ?? p.lat, exit?.lon ?? p.lon, input, exit ? 'exit' : 'near');
+    const area = areaAround(p.lat, p.lon, input);
+    const seen = new Set<string>();
+    const chartStations: { id: string; km: number }[] = [];
+    for (const r of trendCandidates(a)) if (!seen.has(r.stationId!)) { seen.add(r.stationId!); chartStations.push({ id: r.stationId!, km: r.km }); }
+    chartStations.length = Math.min(chartStations.length, 2);
+    return { p, a, olderAt: input.olderSnapshotAt, coverage: coverageLine(a, p.lat, p.lon, input.obs), input, trend, access, area, chartStations };
   }));
   if (gen !== contentGen) return;
 
   const hstates = getJson<Record<string, HState>>(ctx.kv, 'hyst', {});
   let rose = false;
-  const withShown = assessed.map(({ p, a, olderAt, coverage }) => {
+  const withShown = assessed.map(({ p, a, olderAt, coverage, input, trend, access, area, chartStations }) => {
     const key = placeKey(p);
     const prev = hstates[key] ?? null;
     const next = smooth(prev, a.level, ctx.meta.generatedAt);
@@ -222,7 +243,8 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
     if (prev && prev.level > 0 && next.level > prev.level && next.level >= 2) rose = true;
     hstates[key] = next;
     const shownLevel: Level = ctx.kv.persistent ? next.level : a.level;
-    return { p, a, shownLevel, olderAt, coverage };
+    const situation = situationOf(shownLevel, a, trend, input.obs, now);
+    return { p, a, shownLevel, olderAt, coverage, input, trend, access, area, chartStations, situation };
   });
   setJson(ctx.kv, 'hyst', hstates);
   withShown.sort((x, y) => y.shownLevel - x.shownLevel);
@@ -230,10 +252,17 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
   if (rose) announceRise(ctx);
 
   const compact = withShown.length > 3;
-  for (const { p, a, shownLevel, olderAt, coverage } of withShown) {
+  for (const { p, a, shownLevel, olderAt, coverage, input, trend, access, area, chartStations, situation } of withShown) {
     const key = placeKey(p);
     cards.append(renderCard({
       place: p, a, shownLevel, generatedAt: olderAt ?? ctx.meta.generatedAt, now, grey: fr.grey || olderAt !== null, compact, coverage,
+      view: { trend, situation, access, area, vehicle: ctx.settings.vehicle, causes: causeLines(a, input.obs), chartStations },
+      onChart: (host) => void import('./week').then((m) => m.mountWeekCharts(host, ctx.store, chartStations, now)).catch(() => {
+        clear(host);
+        host.append(h('p', { role: 'alert', 'data-testid': 'week-error' }, 'โหลดกราฟไม่ได้ — โหลดหน้าใหม่แล้วลองอีกครั้ง ',
+          h('button', { 'data-testid': 'week-reload', onclick: () => location.reload() }, 'โหลดหน้าใหม่')));
+      }),
+      onClearExit: () => { savePlaces(ctx, currentPlaces(ctx).map((q) => (placeKey(q) === key ? { name: q.name, lat: q.lat, lon: q.lon } : q))); void renderHome(ctx); },
       // A card built from an older snapshot shares that older time, never the newer meta time.
       onShare: () => void doShare(ctx, [p], shareCaption(p.name, shownLevel, olderAt ?? ctx.meta.generatedAt)),
       onRemove: () => { savePlaces(ctx, currentPlaces(ctx).filter((q) => placeKey(q) !== key)); void renderHome(ctx); },

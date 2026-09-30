@@ -1,4 +1,5 @@
 import { buildPointInput, pointProvinces, type EventsFile, type ForecastFile, type PointInput, type ProvObsFile } from '../../core/point-input';
+import { weekFile, type WeekFile } from '../../core/week';
 import { isSkillFile, type SkillFile } from '../../core/skill';
 import type { FloodEvent, Level, Observation, ProvinceGeo, SourceHealth, TmdWarning } from '../../core/types';
 
@@ -49,6 +50,15 @@ export class DataStore {
       for (const k of [...this.cache.keys()]) if (k.startsWith('data/')) this.cache.delete(k);
       this.gen = generatedAt;
     }
+  }
+
+  generatedAt(): string | null { return this.gen; }
+
+  /** One station's 7-day hourly series (loaded only when a card's chart is opened). */
+  async week(id: string): Promise<WeekFile> {
+    const name = weekFile(id);
+    if (!name) throw new Error(`no week file for ${id}`);
+    return (await this.get<WeekFile>(`data/week/${name}.json`)).data;
   }
 
   async meta(): Promise<{ meta: Meta; serverDate: string | null }> {

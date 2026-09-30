@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { emptyHistory, type History } from '../core/history';
 import type { RawObs, SourceId } from '../core/types';
+import type { WeekStore } from '../core/week';
 import type { EvalLog } from './eval-log';
 
 export interface PipelineState {
@@ -21,6 +22,8 @@ export interface PipelineState {
   lastSeen?: Record<string, RawObs>;
   /** Hourly evaluation snapshots for evaluate.yml (Plan C). Optional for legacy states. */
   evalLog?: EvalLog;
+  /** Hourly 7-day water history for the chart (spec 2026-09-30 §4.1). Optional for legacy states. */
+  week?: WeekStore;
 }
 
 export const emptyState = (): PipelineState => ({ v: 1, savedAt: null, history: emptyHistory(), lastGood: {} });
