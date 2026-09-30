@@ -20,6 +20,7 @@ import { buildIndex, search, type GazIndex, type GazRow } from '../lib/search';
 import type { Settings } from '../lib/settings';
 import { getJson, setJson, type KV } from '../lib/storage';
 import { renderCard } from './card';
+import { mountHospitals } from './hospitals';
 import { openQr, sharePlaces } from './share';
 import { refreshNavHashes, tabLink, type ShellRefs } from './shell';
 
@@ -262,6 +263,7 @@ async function renderContent(ctx: AppCtx, content: HTMLElement): Promise<void> {
         host.append(h('p', { role: 'alert', 'data-testid': 'week-error' }, 'โหลดกราฟไม่ได้ — โหลดหน้าใหม่แล้วลองอีกครั้ง ',
           h('button', { 'data-testid': 'week-reload', onclick: () => location.reload() }, 'โหลดหน้าใหม่')));
       }),
+      onHospitals: (host) => void mountHospitals(host, ctx.store, p.lat, p.lon, input),
       onClearExit: () => { savePlaces(ctx, currentPlaces(ctx).map((q) => (placeKey(q) === key ? { name: q.name, lat: q.lat, lon: q.lon } : q))); void renderHome(ctx); },
       // A card built from an older snapshot shares that older time, never the newer meta time.
       onShare: () => void doShare(ctx, [p], shareCaption(p.name, shownLevel, olderAt ?? ctx.meta.generatedAt)),

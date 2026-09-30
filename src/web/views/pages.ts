@@ -16,6 +16,7 @@ const SOURCE_TH: Record<string, string> = {
   river: 'ระดับน้ำแม่น้ำ — สสน. (ThaiWater)', rain: 'ฝน — สสน. (ThaiWater)', road: 'น้ำบนถนน กทม. — สสน. (ThaiWater)',
   canal: 'ระดับน้ำคลอง กทม. — สสน. (ThaiWater)', dam: 'เขื่อน — สสน. (ThaiWater)', longdo: 'เหตุการณ์บนถนน — Longdo Traffic',
   traffy: 'ประชาชนแจ้ง — Traffy Fondue (ยังไม่ยืนยัน)', forecast: 'พยากรณ์ฝน — Open-Meteo', tmd: 'ประกาศเตือน — กรมอุตุนิยมวิทยา',
+  hospitals: 'โรงพยาบาล (OSM)',
 };
 
 export async function renderPage(tab: Exclude<Tab, 'home' | 'map'>, ctx: AppCtx): Promise<void> {
@@ -200,6 +201,7 @@ function about(ctx: AppCtx, main: HTMLElement): void {
         h('li', {}, 'ขอบเขตการปกครองและรายชื่อตำบล: OCHA COD-AB Thailand (CC BY-IGO)'),
         h('li', {}, 'แผนที่พื้นฐาน: OpenFreeMap · © OpenMapTiles · ข้อมูลแผนที่ © ผู้ร่วมพัฒนา OpenStreetMap (ODbL)'),
         h('li', {}, 'ค้นหาสถานที่: Nominatim · © ผู้ร่วมพัฒนา OpenStreetMap (ODbL)'),
+        h('li', {}, 'ข้อมูลโรงพยาบาล: © ผู้ร่วมพัฒนา OpenStreetMap (ODbL)'),
         h('li', {}, 'ไลบรารีแผนที่: MapLibre GL JS (BSD-3-Clause) — ', h('a', { href: './licenses/maplibre-gl.txt', 'data-testid': 'maplibre-license' }, 'ข้อความสัญญาอนุญาต')),
         h('li', {}, 'ฟอนต์: Noto Sans Thai Looped (SIL Open Font License)')),
       h('p', { class: 'muted' }, DISCLAIMER_TH)));

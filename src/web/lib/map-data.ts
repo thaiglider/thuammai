@@ -1,4 +1,6 @@
 import { inThailand } from '../../core/geo';
+import { HOSPITAL_NOTE_TH } from '../../core/advice';
+import { osmUrl, type HospitalItem } from '../../core/hospital';
 import { LEVEL_COLOR, LEVEL_TH } from '../../core/labels';
 import { isLiveEvent } from '../../core/risk';
 import { fmtTime } from '../../core/time';
@@ -7,7 +9,7 @@ import { obsValueText } from './format';
 import { relativeAge } from './freshness';
 import { parseLatLonParams, placeKey, type Place } from './places';
 
-export type ExtraLayer = Kind | 'reports';
+export type ExtraLayer = Kind | 'reports' | 'hospital';
 export const EXTRA_LAYERS: readonly { id: ExtraLayer; label: string }[] = [
   { id: 'river', label: 'แม่น้ำ' },
   { id: 'canal', label: 'คลอง' },
@@ -15,11 +17,16 @@ export const EXTRA_LAYERS: readonly { id: ExtraLayer; label: string }[] = [
   { id: 'rain', label: 'ฝน' },
   { id: 'dam', label: 'เขื่อน' },
   { id: 'reports', label: 'รายงานน้ำท่วม' },
+  { id: 'hospital', label: 'โรงพยาบาล' },
 ];
 /** Extra station layers load the obs file of every province in view; beyond this many we ask the
  *  user to zoom in instead of downloading most of the country (~200 KB gzip). */
 export const MAX_VIEW_PROVINCES = 6;
 export const REPORT_COLOR = '#1d4ed8';
+/** Hospitals (OSM): a hue no risk level or report dot uses. */
+export const HOSPITAL_COLOR = '#7c3aed';
+/** The station-kind layers (not reports, not hospitals). */
+export const isKindLayer = (l: ExtraLayer): l is Kind => l !== 'reports' && l !== 'hospital';
 export const PLACE_COLOR = '#111827';
 export const TH_OVERVIEW: { center: [number, number]; zoom: number } = { center: [100.99, 13.0], zoom: 4.6 };
 
@@ -46,6 +53,11 @@ export function eventFeatures(events: readonly FloodEvent[], now: Date, grey: bo
   const features = events.filter((e) => isLiveEvent(e, now)).map((e) =>
     point(e.lon, e.lat, { id: e.id, kind: 'report', level: 0, c: grey ? LEVEL_COLOR[0].bg : REPORT_COLOR, r: 6 }));
   return { type: 'FeatureCollection', features };
+}
+
+/** OSM hospitals as map points (id = the OSM id, e.g. "n123"). */
+export function hospitalFeatures(items: readonly HospitalItem[]): FC {
+  return { type: 'FeatureCollection', features: items.map((i) => point(i[3], i[2], { id: i[0], kind: 'hospital', level: 0, c: HOSPITAL_COLOR, r: 6 })) };
 }
 
 export function placeFeatures(places: readonly Place[]): FC {
@@ -174,4 +186,9 @@ export function reportPopupLines(e: FloodEvent, now: Date, grey = false): string
     grey ? `${when} (ข้อมูลเก่า อาจไม่ตรงกับตอนนี้)` : when,
     REPORTER_TH[e.reporter],
   ]);
+}
+
+/** Hospital popup content: plain strings only (the view puts them in with textContent) and an OSM link. */
+export function hospitalPopup(name: string, fetchedAt: string, osmId: string): { title: string; note: string; href: string | null } {
+  return { title: name, note: HOSPITAL_NOTE_TH(fetchedAt), href: osmUrl(osmId) };
 }

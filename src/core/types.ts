@@ -58,9 +58,12 @@ export interface ForecastPoint {
   mm: number[];          // hourly precipitation, next 6 hours
 }
 
+/** OpenStreetMap amenity=hospital (id like n123 / w456 / r789). */
+export interface Hospital { osmId: string; name: string; lat: number; lon: number }
+
 export interface TmdWarning { title: string; body: string; issued: string | null }
 
-export type SourceId = 'river' | 'rain' | 'road' | 'canal' | 'dam' | 'longdo' | 'traffy' | 'forecast' | 'tmd';
+export type SourceId = 'river' | 'rain' | 'road' | 'canal' | 'dam' | 'longdo' | 'traffy' | 'forecast' | 'tmd' | 'hospitals';
 
 export interface SourceHealth {
   id: SourceId;

@@ -61,6 +61,7 @@ summary { min-height: 44px; padding: 7px 0; cursor: pointer; }
 .mapcover:empty { display: none; }
 .legend { list-style: none; padding: 0; margin: 8px 0 4px; display: flex; flex-wrap: wrap; gap: 2px 14px; }
 .legend li { display: flex; align-items: center; gap: 6px; }
+.legend li[hidden] { display: none; }
 .swatch { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 0 0 1px var(--fg); }
 .badge.small { font-size: 1rem; }
 .mapbox .maplibregl-popup-content { color: #111827; font: inherit; font-size: 1rem; line-height: 1.6; padding: 10px 40px 10px 12px; }

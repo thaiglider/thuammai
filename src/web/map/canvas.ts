@@ -8,7 +8,7 @@ setWorkerUrl(workerUrl);
 
 export const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 
-export type SourceId = 'flagged' | 'extra' | 'reports' | 'places';
+export type SourceId = 'flagged' | 'extra' | 'reports' | 'hospitals' | 'places';
 export interface CanvasOpts {
   container: HTMLElement; center: [number, number]; zoom: number;
   onReady(): void;
@@ -102,16 +102,17 @@ export function createMapCanvas(o: CanvasOpts): MapCanvas {
 
   const data = new Map<SourceId, FC>();
   const visible = new Set<ExtraLayer>();
-  const layerOf = (l: ExtraLayer) => (l === 'reports' ? 'reports' : `extra-${l}`);
+  const layerOf = (l: ExtraLayer) => (l === 'reports' ? 'reports' : l === 'hospital' ? 'hospital' : `extra-${l}`);
   let loaded = false;
   map.on('load', () => {
     loaded = true;
     const thai = preferThaiLabels(map);
     o.container.dataset.thLabels = String(thai.length);
     if (thai.length) o.container.dataset.labelField = JSON.stringify(map.getLayoutProperty(thai[0]!, 'text-field'));
-    for (const id of ['extra', 'reports', 'places', 'flagged'] as const) map.addSource(id, { type: 'geojson', data: (data.get(id) ?? EMPTY) as GeoData });
+    for (const id of ['extra', 'reports', 'hospitals', 'places', 'flagged'] as const) map.addSource(id, { type: 'geojson', data: (data.get(id) ?? EMPTY) as GeoData });
     for (const k of KINDS) map.addLayer(circle(`extra-${k}`, 'extra', visible.has(k), k));
     map.addLayer(circle('reports', 'reports', visible.has('reports')));
+    map.addLayer(circle('hospital', 'hospitals', visible.has('hospital')));
     map.addLayer(circle('flagged', 'flagged', true));
     map.addLayer(circle('places', 'places', true, undefined, 3));
     // Not `.once`: every idle after the first also tells the view the map is settled, so a
@@ -123,7 +124,7 @@ export function createMapCanvas(o: CanvasOpts): MapCanvas {
   // failed tile before the first 'load' doesn't tear down a working map.
   map.on('error', (e) => o.onError(mapErrorStage(e as unknown as Parameters<typeof mapErrorStage>[0], loaded, STYLE_URL)));
   map.on('moveend', () => o.onMoveEnd());
-  const clickable = ['places', 'flagged', 'reports', ...KINDS.map((k) => `extra-${k}`)];
+  const clickable = ['places', 'flagged', 'reports', 'hospital', ...KINDS.map((k) => `extra-${k}`)];
   map.on('click', (e) => {
     if (!loaded) return;
     const pad = 12; // finger-sized hit area around small circles

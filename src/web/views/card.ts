@@ -19,7 +19,7 @@ export interface CardView {
 export interface CardOpts {
   place: Place; a: Assessment; shownLevel: Level; generatedAt: string; now: Date; grey: boolean;
   onShare(): void; onRemove(): void; onRename(name: string): void; compact?: boolean; coverage?: string | null;
-  view: CardView; onChart(host: HTMLElement): void; onClearExit(): void;
+  view: CardView; onChart(host: HTMLElement): void; onHospitals(host: HTMLElement): void; onClearExit(): void;
 }
 
 export const FAR_WITH_COVERAGE = 'ระดับนี้คิดจากหลักฐานที่อยู่ไกลหรือฝน ให้ดูสภาพจริงรอบบ้านและประกาศของอำเภอ';
@@ -71,6 +71,11 @@ export function renderCard(o: CardOpts): HTMLElement {
     chartBtn?.setAttribute('aria-expanded', String(!chartHost.hidden));
     if (!chartHost.hidden && !chartLoaded) { chartLoaded = true; o.onChart(chartHost); }
   } }, 'กราฟ 7 วัน') : null;
+  const hospHost = h('div', { 'data-testid': 'card-hospitals-body' });
+  let hospLoaded = false;
+  const hospitals = h('details', { 'data-testid': 'card-hospitals', ontoggle: (e: Event) => {
+    if ((e.target as HTMLDetailsElement).open && !hospLoaded) { hospLoaded = true; o.onHospitals(hospHost); }
+  } }, h('summary', {}, 'โรงพยาบาลใกล้จุดนี้'), hospHost);
   const rename = () => {
     const name = prompt('ตั้งชื่อจุดนี้', o.place.name);
     if (name !== null) o.onRename(name);
@@ -106,5 +111,6 @@ export function renderCard(o: CardOpts): HTMLElement {
       h('button', { onclick: rename }, 'แก้ชื่อ'),
       h('button', { onclick: () => { if (confirm(`ลบ "${o.place.name}"?`)) o.onRemove(); } }, 'ลบ')),
     chartHost,
+    hospitals,
     o.compact ? null : h('p', { class: 'muted' }, NO_OFFICIAL_ORDER));
 }

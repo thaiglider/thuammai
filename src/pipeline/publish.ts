@@ -8,7 +8,7 @@ import type { WeekStore } from '../core/week';
 import type { Collected } from './collect';
 import { renderAreaPage, renderIndex, type IndexRow, type UpstreamRow } from './render';
 import type { PipelineState } from './state';
-import type { StaticData } from './static-data';
+import { provinceAt, type StaticData } from './static-data';
 import { weekOutputs } from './week';
 
 export interface PublishInput {
@@ -53,6 +53,14 @@ export function buildOutputs(inp: PublishInput): Map<string, string> {
 
   put('data/events.json', { ...head, windowH: c.traffyWindowH, events: [...c.longdo, ...c.traffy].filter((e) => isLiveEvent(e, now)) });
   put('data/forecast.json', { ...head, points: c.forecast });
+
+  // OSM hospitals: one file per province that has any (written only when a list exists).
+  const hospByProv = new Map<string, [string, string, number, number][]>();
+  for (const x of c.hospitals) {
+    const prov = provinceAt(x.lat, x.lon, sd);
+    if (prov) (hospByProv.get(prov) ?? hospByProv.set(prov, []).get(prov)!).push([x.osmId, x.name, x.lat, x.lon]);
+  }
+  for (const [prov, items] of hospByProv) put(`data/hospitals/${prov}.json`, { ...head, fetchedAt: c.hospitalsFetchedAt, items });
 
   // upstream (display only)
   const riverByCode = new Map(obs.filter((o) => o.kind === 'river').map((o) => [o.id.slice('river:'.length), o]));

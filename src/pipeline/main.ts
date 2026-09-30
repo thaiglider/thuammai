@@ -48,6 +48,13 @@ function assertSafeOutDir(out: string): void {
   }
 }
 
+/** Every water/traffic source failed at once → nothing worth deploying. The weekly 'hospitals'
+ *  source is ok:true whenever it is not due, so it must not count. */
+export function isTotalOutage(health: readonly SourceHealth[]): boolean {
+  const live = health.filter((h) => h.id !== 'hospitals');
+  return live.length > 0 && live.every((h) => !h.ok);
+}
+
 export interface RunResult { files: number; health: SourceHealth[]; obs: Observation[]; collected: Collected }
 
 export async function runPipeline(opts: RunOpts): Promise<RunResult> {
@@ -160,7 +167,7 @@ async function cli() {
     const stateFileSize = statSync(join(values.out!, 'data', '_state.json')).size;
     console.log(`data/_state.json: ${stateFileSize} bytes`);
   } catch { /* not fatal — just an informational line */ }
-  if (r.health.every((h) => !h.ok)) process.exit(2); // total outage → do not deploy
+  if (isTotalOutage(r.health)) process.exit(2); // total outage → do not deploy
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

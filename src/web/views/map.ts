@@ -5,7 +5,7 @@ import { snapshotMismatch } from '../lib/data';
 import { clear, h } from '../lib/dom';
 import { freshness, relativeAge, staleLine } from '../lib/freshness';
 import {
-  EXTRA_LAYERS, eventFeatures, extrasKey, initialView, obsFeatures, pinCheck, PLACE_COLOR, placeFeatures, provincesInView,
+  EXTRA_LAYERS, eventFeatures, extrasKey, HOSPITAL_COLOR, hospitalFeatures, hospitalPopup, initialView, isKindLayer, obsFeatures, pinCheck, PLACE_COLOR, placeFeatures, provincesInView,
   REPORT_COLOR, reportPopupLines, shouldAutoLoadMap, stationPopupLines, stationRows, type ExtraLayer, type StationRow,
 } from '../lib/map-data';
 import { FULL_TH, MAX_PLACES, placeKey, type Place } from '../lib/places';
@@ -30,14 +30,14 @@ const LAYERS_NEED_MAP_TH = 'เปิดแผนที่ก่อน จึง
 
 interface MapState {
   ctx: AppCtx; main: HTMLElement; mapBox: HTMLElement; canvasHost: HTMLElement; cover: HTMLElement; pin: HTMLButtonElement;
-  status: HTMLElement; legendNote: HTMLElement; layerNote: HTMLElement; list: HTMLDetailsElement; layerInputs: HTMLInputElement[];
+  status: HTMLElement; hospLegend: HTMLElement; legendNote: HTMLElement; layerNote: HTMLElement; list: HTMLDetailsElement; layerInputs: HTMLInputElement[];
   canvas: MapCanvas | null; problem: Problem | null; grey: boolean; dataAt: string; flagged: Observation[];
   // 'flagged' stations (nationwide, always shown) and the extra kind layers' stations (province
   // obs files, shown only while toggled on) are kept in separate maps with separate staleness —
   // so a station that happens to be in both keeps its flagged reading/greyness for the flagged
   // dot, and the extra dot (possibly from an older province snapshot) states its own staleness.
   obsById: Map<string, Observation>; extraObsById: Map<string, Observation>; extraGrey: boolean;
-  eventsById: Map<string, FloodEvent>; reportsGrey: boolean; on: Set<ExtraLayer>; extraSeq: number;
+  hospitals: Map<string, string>; hospKey: string | null; eventsById: Map<string, FloodEvent>; reportsGrey: boolean; on: Set<ExtraLayer>; extraSeq: number;
   // What the canvas's 'extra'/'reports' sources currently hold (see extrasKey); a pan inside the
   // same provinces then neither refetches nor re-sets the layer. Reset when the canvas changes.
   extraKey: string | null; reportsKey: string | null;
@@ -75,17 +75,19 @@ function mount(ctx: AppCtx): MapState {
   const layerNote = h('p', { class: 'muted', role: 'status', 'data-testid': 'map-layer-note' });
   const list = h('details', { 'data-testid': 'map-list' });
   const levels: Level[] = [4, 3, 2, 1, 0];
+  const hospLegend = h('li', { 'data-testid': 'legend-hospital', hidden: true }, swatch(HOSPITAL_COLOR), 'โรงพยาบาล (OpenStreetMap)');
   // Legend sits directly above the map so it is on screen whenever the map is.
   const legend = h('section', { 'aria-label': 'ความหมายของสีบนแผนที่' },
     h('ul', { class: 'legend', 'data-testid': 'map-legend' },
       ...levels.map((l) => h('li', {}, swatch(LEVEL_COLOR[l].bg), LEVEL_TH[l])),
       h('li', {}, swatch(REPORT_COLOR), 'รายงานน้ำท่วม'),
+      hospLegend,
       h('li', {}, swatch(PLACE_COLOR), 'จุดของฉัน')),
     legendNote);
   const s: MapState = {
-    ctx, main, mapBox, canvasHost, cover, pin, status, legendNote, layerNote, list, layerInputs: [],
+    ctx, main, mapBox, canvasHost, cover, pin, status, hospLegend, legendNote, layerNote, list, layerInputs: [],
     canvas: null, problem: null, grey: false, dataAt: ctx.meta.generatedAt, flagged: [], obsById: new Map(), extraObsById: new Map(), extraGrey: false,
-    eventsById: new Map(), reportsGrey: false, on: new Set(), extraSeq: 0, extraKey: null, reportsKey: null,
+    hospitals: new Map(), hospKey: null, eventsById: new Map(), reportsGrey: false, on: new Set(), extraSeq: 0, extraKey: null, reportsKey: null,
     importFailed: false, exitFor: exitPlace,
   };
   s.layerInputs = EXTRA_LAYERS.map((l) => h('input', {
@@ -214,6 +216,7 @@ async function startMap(s: MapState): Promise<void> {
   s.canvas = created;
   s.extraKey = null;
   s.reportsKey = null;
+  s.hospKey = null;
   syncLayerInputs(s);
   for (const l of s.on) created.setVisible(l, true);
   pushData(s);
@@ -261,11 +264,13 @@ function toggleLayer(s: MapState, id: ExtraLayer, on: boolean): void {
   if (on) s.on.add(id);
   else s.on.delete(id);
   s.canvas?.setVisible(id, on);
+  if (id === 'hospital') s.hospLegend.hidden = !on;
   // loadExtras only rewrites data-reports/data-extra while that group has at least one active
   // layer; turning the last one off would otherwise leave the previous count stale.
   if (!on) {
     if (id === 'reports') { s.mapBox.dataset.reports = '0'; s.reportsKey = null; }
-    else if (![...s.on].some((l) => l !== 'reports')) { s.mapBox.dataset.extra = '0'; s.extraObsById.clear(); s.extraKey = null; }
+    else if (id === 'hospital') { s.canvas?.setData('hospitals', hospitalFeatures([])); s.mapBox.dataset.hospitals = '0'; s.hospitals.clear(); s.hospKey = null; }
+    else if (![...s.on].some(isKindLayer)) { s.mapBox.dataset.extra = '0'; s.extraObsById.clear(); s.extraKey = null; }
   }
   void loadExtras(s);
 }
@@ -297,7 +302,7 @@ async function loadExtras(s: MapState): Promise<void> {
       }
     }
   }
-  const kinds = [...s.on].filter((l) => l !== 'reports');
+  const kinds = [...s.on].filter(isKindLayer);
   if (kinds.length) {
     const provinces = await s.ctx.store.provinces().catch(() => null);
     if (my !== s.extraSeq || s.canvas !== canvas) return;
@@ -331,7 +336,41 @@ async function loadExtras(s: MapState): Promise<void> {
       s.extraKey = partial ? null : key;
     }
   }
+  if (s.on.has('hospital')) await loadHospitals(s, canvas, my, notes);
   if (my === s.extraSeq) s.layerNote.textContent = notes.join(' · ');
+}
+
+/** OSM hospitals of the provinces in view (same limit and files-per-province rule as the station layers). */
+async function loadHospitals(s: MapState, canvas: MapCanvas, my: number, notes: string[]): Promise<void> {
+  const snapshot = s.ctx.meta.generatedAt;
+  const provinces = await s.ctx.store.provinces().catch(() => null);
+  if (my !== s.extraSeq || s.canvas !== canvas) return;
+  const codes = provinces ? provincesInView(canvas.bounds(), provinces) : [];
+  const key = provinces ? extrasKey(snapshot, false, codes, ['hospital']) : null;
+  if (key !== null && key === s.hospKey) {
+    if (codes === null) notes.push('ซูมเข้าอีกเพื่อดูโรงพยาบาล');
+    return;
+  }
+  if (codes === null) {
+    notes.push('ซูมเข้าอีกเพื่อดูโรงพยาบาล');
+    canvas.setData('hospitals', hospitalFeatures([]));
+    s.mapBox.dataset.hospitals = '0';
+    s.hospitals.clear();
+    s.hospKey = key;
+    return;
+  }
+  // A province without a file has no hospitals (null); only a real failure is partial.
+  const results = await Promise.allSettled(codes.map((c) => s.ctx.store.hospitals(c)));
+  if (my !== s.extraSeq || s.canvas !== canvas) return;
+  const files = results.flatMap((r) => (r.status === 'fulfilled' && r.value ? [r.value] : []));
+  const partial = !provinces || results.some((r) => r.status === 'rejected');
+  if (partial) notes.push('โหลดข้อมูลโรงพยาบาลบางจังหวัดไม่ได้ — อาจไม่ครบ');
+  s.hospitals.clear();
+  for (const f of files) for (const i of f.items) s.hospitals.set(i[0], `${i[1]}\u0000${f.fetchedAt}`);
+  const items = files.flatMap((f) => f.items);
+  canvas.setData('hospitals', hospitalFeatures(items));
+  s.mapBox.dataset.hospitals = String(items.length);
+  s.hospKey = partial ? null : key;
 }
 
 /** Popup body — built with h()/textContent only, so published names and titles stay plain text. */
@@ -342,6 +381,13 @@ function popupFor(s: MapState, source: SourceId, id: string): HTMLElement | null
     if (!e) return null;
     const [title, ...rest] = reportPopupLines(e, now, s.reportsGrey);
     return h('div', { class: 'popup', 'data-testid': 'map-popup' }, h('strong', {}, title ?? ''), ...rest.map((t) => h('div', {}, t)));
+  }
+  if (source === 'hospitals') {
+    const [name, fetchedAt] = (s.hospitals.get(id) ?? '').split('\u0000');
+    if (!name || !fetchedAt) return null;
+    const pop = hospitalPopup(name, fetchedAt, id);
+    return h('div', { class: 'popup', 'data-testid': 'map-popup' }, h('strong', {}, pop.title), h('div', {}, pop.note),
+      pop.href ? h('div', {}, h('a', { href: pop.href, target: '_blank', rel: 'noopener' }, 'ดูใน OpenStreetMap')) : null);
   }
   if (source === 'places') {
     if (id.endsWith('#exit')) {

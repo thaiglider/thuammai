@@ -1,8 +1,8 @@
-import { fmtTime } from './time';
+import { fmtDay, fmtTime } from './time';
 import type { Assessment } from './risk';
 import type { Access, Area, Pass } from './access';
 import type { Situation } from './situation';
-import type { Vehicle } from './thresholds';
+import { HOSPITAL, type Vehicle } from './thresholds';
 import { trendCandidates, type Trend } from './trend';
 import type { Level, Observation } from './types';
 
@@ -135,3 +135,9 @@ export function confidenceLine(a: Assessment): string | null {
   }
   return 'ความมั่นใจต่ำ — หลักฐานอยู่ไกลหรือยังไม่ยืนยัน ให้ดูสภาพจริงรอบบ้านประกอบ';
 }
+
+/** Hospital text (Plan L): straight-line distance only, and never a claim of an ER or opening hours. */
+export const HOSPITAL_NOTE_TH = (fetchedAt: string): string =>
+  `ตามข้อมูล OpenStreetMap ณ ${fmtDay(fetchedAt.slice(0, 10)) ?? 'ไม่ทราบวันที่'} · ไม่รับรองว่ามีห้องฉุกเฉินหรือเปิดอยู่ · เจ็บป่วยฉุกเฉินโทร 1669`;
+export const hospitalLine = (h: { name: string; km: number }): string => `${h.name} · ระยะตรง ${distanceText(h.km)}`;
+export const HOSPITAL_EMPTY_TH = `ไม่พบข้อมูลโรงพยาบาลในรัศมี ${HOSPITAL.nearKm} กม. — เจ็บป่วยฉุกเฉินโทร 1669`;

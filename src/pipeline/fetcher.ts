@@ -6,12 +6,22 @@ import { getJson, getText } from './http';
 export interface Fetcher {
   json(url: string, headers?: Record<string, string>): Promise<unknown>;
   text(url: string, headers?: Record<string, string>): Promise<string>;
+  /** POST a form body once (no retry) and parse JSON; optional so test doubles may omit it. */
+  postJson?(url: string, body: string, opts?: { timeoutMs?: number }): Promise<unknown>;
 }
 
 export function liveFetcher(): Fetcher {
   return {
     json: (url, headers) => getJson(url, { headers }),
     text: (url, headers) => getText(url, { headers }),
+    postJson: async (url, body, opts) => {
+      const text = await getText(url, {
+        method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, retries: 0, timeoutMs: opts?.timeoutMs,
+      });
+      const t = text.trimStart();
+      if (!t.startsWith('{')) throw new Error(`Response from ${url} is not JSON: ${t.slice(0, 60)}`);
+      return JSON.parse(t);
+    },
   };
 }
 
@@ -44,6 +54,10 @@ export function fixtureFetcher(dir: string): Fetcher {
     }],
   ];
   return {
+    async postJson(url) {
+      if (/overpass/.test(url)) return gz('overpass_hospitals.json.gz');
+      throw new Error(`no fixture for ${url}`);
+    },
     async json(url) {
       const hit = routes.find(([re]) => re.test(url));
       if (!hit) throw new Error(`no fixture for ${url}`);

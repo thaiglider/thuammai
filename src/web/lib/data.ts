@@ -1,4 +1,5 @@
 import { buildPointInput, pointProvinces, type EventsFile, type ForecastFile, type PointInput, type ProvObsFile } from '../../core/point-input';
+import type { HospitalsFile } from '../../core/hospital';
 import { weekFile, type WeekFile } from '../../core/week';
 import { isSkillFile, type SkillFile } from '../../core/skill';
 import type { FloodEvent, Level, Observation, ProvinceGeo, SourceHealth, TmdWarning } from '../../core/types';
@@ -59,6 +60,17 @@ export class DataStore {
     const name = weekFile(id);
     if (!name) throw new Error(`no week file for ${id}`);
     return (await this.get<WeekFile>(`data/week/${name}.json`)).data;
+  }
+
+  /** One province's OSM hospitals; null = no file (the pipeline writes none for a province without
+   *  hospitals). Any other failure rejects so the caller can offer a retry. */
+  async hospitals(prov: string): Promise<HospitalsFile | null> {
+    try {
+      return (await this.get<HospitalsFile>(`data/hospitals/${prov}.json`)).data;
+    } catch (e) {
+      if (e instanceof Error && /^HTTP 404 /.test(e.message)) return null;
+      throw e;
+    }
   }
 
   async meta(): Promise<{ meta: Meta; serverDate: string | null }> {

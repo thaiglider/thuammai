@@ -1,12 +1,13 @@
-import { MIN_COUNT, TRAFFY } from '../core/thresholds';
+import { HOSPITAL, MIN_COUNT, TRAFFY } from '../core/thresholds';
 import { ageMin, toIso07 } from '../core/time';
-import type { FloodEvent, ForecastPoint, RawObs, SourceHealth, SourceId, TmdWarning } from '../core/types';
+import type { FloodEvent, ForecastPoint, Hospital, RawObs, SourceHealth, SourceId, TmdWarning } from '../core/types';
 import type { Fetcher } from './fetcher';
 import { THAIWATER_HEADERS } from './http';
 import { LONGDO_URL, parseLongdo } from './sources/longdo';
 import { forecastPoints, openMeteoUrl, parseOpenMeteo } from './sources/openmeteo';
 import { TW_URL, parseCanal, parseDam, parseRain, parseRiver, parseRoad } from './sources/thaiwater';
 import { TMD_URL, parseTmd } from './sources/tmd';
+import { OVERPASS_URL, overpassBody, parseOverpassHospitals } from './sources/osm-hospitals';
 import { fetchTraffy } from './sources/traffy';
 import type { PipelineState } from './state';
 import type { StaticData } from './static-data';
@@ -14,12 +15,14 @@ import type { StaticData } from './static-data';
 export interface Collected {
   river: RawObs[]; rain: RawObs[]; road: RawObs[]; canal: RawObs[]; dam: RawObs[];
   longdo: FloodEvent[]; traffy: FloodEvent[]; forecast: ForecastPoint[]; tmd: TmdWarning[];
+  /** OSM hospitals (weekly refresh, carried between runs) and the ISO time of the last good fetch. */
+  hospitals: Hospital[]; hospitalsFetchedAt: string | null;
   health: SourceHealth[]; traffyWindowH: number;
 }
 
 /** A forecast fetched less than this long ago is reused instead of calling Open-Meteo again. */
 const FORECAST_REUSE_MIN = 60;
-const HEALTH_ORDER: SourceId[] = ['river', 'rain', 'road', 'canal', 'dam', 'longdo', 'traffy', 'forecast', 'tmd'];
+const HEALTH_ORDER: SourceId[] = ['river', 'rain', 'road', 'canal', 'dam', 'longdo', 'traffy', 'forecast', 'tmd', 'hospitals'];
 
 type Timed = { t?: string; start?: string };
 type Result<T> = { items: T[]; health: SourceHealth };
@@ -89,18 +92,21 @@ export async function collectAll(
   const tmdP = run('tmd', st, now, async () =>
     parseTmd(await f.text(TMD_URL)).map((w) => ({ ...w, t: w.issued ?? undefined })));
 
-  const [tw5, longdo, traffy, forecast, tmdTimed] = await Promise.all([thaiwater(), longdoP, traffyP, forecastP, tmdP]);
+  const hospitalsP = collectHospitals(f, st, now, sd);
+
+  const [tw5, longdo, traffy, forecast, tmdTimed, hospitals] = await Promise.all([thaiwater(), longdoP, traffyP, forecastP, tmdP, hospitalsP]);
 
   const traffyWindowH = st.traffyWindowH ?? 0;
   traffy.health.windowH = traffyWindowH;
   const byId: Record<SourceId, SourceHealth> = {
     river: tw5.river.health, rain: tw5.rain.health, road: tw5.road.health, canal: tw5.canal.health, dam: tw5.dam.health,
-    longdo: longdo.health, traffy: traffy.health, forecast: forecast.health, tmd: tmdTimed.health,
+    longdo: longdo.health, traffy: traffy.health, forecast: forecast.health, tmd: tmdTimed.health, hospitals: hospitals.health,
   };
   const tmd: TmdWarning[] = tmdTimed.items.map(({ title, body, issued }) => ({ title, body, issued }));
   return {
     river: tw5.river.items, rain: tw5.rain.items, road: tw5.road.items, canal: tw5.canal.items, dam: tw5.dam.items,
     longdo: longdo.items, traffy: traffy.items, forecast: forecast.items, tmd,
+    hospitals: hospitals.items, hospitalsFetchedAt: st.lastGood.hospitals?.at ?? null,
     health: HEALTH_ORDER.map((id) => byId[id]), traffyWindowH,
   };
 }
@@ -112,4 +118,28 @@ function reusedForecast(items: ForecastPoint[], now: Date): Result<ForecastPoint
     items,
     health: { id: 'forecast', ok: true, count: items.length, newest, lagMin: newest ? Math.round(ageMin(newest, now)) : null },
   };
+}
+
+/** One Overpass POST when due (never fetched, or a week since the last good fetch), and not within
+ *  HOSPITAL.retryMin of a failed attempt; otherwise the last good list is carried unchanged. */
+async function collectHospitals(f: Fetcher, st: PipelineState, now: Date, sd: StaticData): Promise<Result<Hospital>> {
+  const lg = st.lastGood.hospitals;
+  const dueAge = lg ? ageMin(lg.at, now) : Infinity;
+  const due = !lg || dueAge >= HOSPITAL.refreshDays * 1440 || dueAge < 0;
+  const failedAge = st.hospitalsAt ? ageMin(st.hospitalsAt, now) : Infinity;
+  if (!due || (failedAge >= 0 && failedAge < HOSPITAL.retryMin)) {
+    const items = (lg?.data as Hospital[] | undefined) ?? [];
+    const health: SourceHealth = { id: 'hospitals', ok: due ? false : true, count: items.length, newest: null, lagMin: null };
+    if (due) {
+      health.error = 'ดึงล้มเหลวล่าสุด รอลองใหม่';
+      if (lg) health.carriedFrom = lg.at;
+    }
+    return { items, health };
+  }
+  const r = await run<Hospital & Timed>('hospitals', st, now, async () => {
+    if (!f.postJson) throw new Error('fetcher cannot POST');
+    return parseOverpassHospitals(await f.postJson(OVERPASS_URL, overpassBody(), { timeoutMs: 90_000 }), sd);
+  });
+  if (r.health.ok) delete st.hospitalsAt; else st.hospitalsAt = toIso07(now);
+  return r;
 }

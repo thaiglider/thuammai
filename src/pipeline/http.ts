@@ -10,6 +10,8 @@ export interface HttpOpts {
   timeoutMs?: number;
   retries?: number;
   retryDelayMs?: number;
+  method?: 'GET' | 'POST';
+  body?: string;
 }
 
 /** 2 attempts × 45 s + 5 s pause stays well inside the pipeline job timeout even for the slowest group. */
@@ -25,7 +27,7 @@ export async function getText(url: string, opts: HttpOpts = {}): Promise<string>
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) await sleep(retryDelayMs);
     try {
-      const res = await fetch(url, { headers: { 'User-Agent': UA, ...headers }, signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetch(url, { method: opts.method, body: opts.body, headers: { 'User-Agent': UA, ...headers }, signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) {
         const err = new Error(`HTTP ${res.status} for ${url}`);
         if (res.status >= 400 && res.status < 500 && res.status !== 429) throw Object.assign(err, { fatal: true });

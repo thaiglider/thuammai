@@ -24,6 +24,8 @@ export interface PipelineState {
   evalLog?: EvalLog;
   /** Hourly 7-day water history for the chart (spec 2026-09-30 §4.1). Optional for legacy states. */
   week?: WeekStore;
+  /** ISO +07:00 of the last failed OSM hospitals fetch; no retry for HOSPITAL.retryMin after it. */
+  hospitalsAt?: string;
 }
 
 export const emptyState = (): PipelineState => ({ v: 1, savedAt: null, history: emptyHistory(), lastGood: {} });
