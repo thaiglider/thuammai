@@ -7,7 +7,7 @@ on:
     branches: [main]
 permissions: {}
 env:
-  SITE_URL: https://thaiglider.github.io/thuammai
+  SITE_URL: https://flood.thaiglider.com
 jobs:
   gate:
     runs-on: ubuntu-latest

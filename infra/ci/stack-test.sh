@@ -12,7 +12,7 @@ IMAGE=ghcr.io/thaiglider/thuammai-server
 NODE_IMG=node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 P256DH='BKKxKoz4vcAPfhOVpockZrObSZr5-iZRoOUpjfJhSGMRJYywCoqgcgaGnw9kJ2VSMFUMMXipV1Axnyisrc2p-Z0'
 AUTH='BwcHBwcHBwcHBwcHBwcHBw'
-ORIGIN='https://thaiglider.github.io'
+ORIGIN='https://flood.thaiglider.com'
 TOKEN='123456:CIfakeTokenForTheStackTest0123456789'
 mkdir -p "$CI_DIR/bin" "$CI_DIR/certs"
 OUT="$CI_DIR/out.log"
@@ -129,12 +129,12 @@ for m in Backup Deploy Host; do kuma_has "ciTok$m" finish up || fail "no Kuma pu
 step "smoke through caddy"
 wait_for 120 status_is on || fail "status is not on: $(api https://flood.test/v1/status || true)"
 [ "$(code https://flood.test/v1/health)" = 200 ] || fail "health"
-# `/` is now the web, proxied from GitHub Pages (domain move stage ก). `thuammai finish` above already needs
-# `/` to answer 200 or 302 (the production rule), so here the proxy must answer 200: a redirect, the old 404
-# or an upstream error fails CI (GitHub runners reach github.io).
-[ "$(code https://flood.test/)" = 200 ] || fail "/ did not answer 200 from the Pages upstream"
-webh="$(api -o /dev/null -D - https://flood.test/ | tr -d '\r')"
-grep -qi '^permissions-policy:.*geolocation=(self)' <<<"$webh" || fail "the web handle lacks Permissions-Policy geolocation=(self)"
+# `/` is API-only again (domain move stage ข): a 302 to PUBLIC_URL, no proxy to Pages. Anything else fails.
+[ "$(code https://flood.test/)" = 302 ] || fail "/ did not answer 302"
+loc="$(api -o /dev/null -D - https://flood.test/ | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')"
+[ "$loc" = "$(grep '^PUBLIC_URL=' "$TH/.env" | cut -d= -f2-)" ] || fail "/ redirects to '$loc', not PUBLIC_URL"
+[ "$(code https://flood.test/anything)" = 404 ] || fail "an unknown path did not answer 404"
+if grep -v '^[[:space:]]*#' "$CADDYFILE" | grep -q 'github\.io'; then fail "the Caddyfile still proxies to github.io"; fi
 apih="$(api -o /dev/null -D - https://flood.test/v1/health | tr -d '\r')"
 grep -qi 'geolocation=(self)' <<<"$apih" && fail "/v1 must not allow geolocation"
 grep -qi '^x-frame-options: SAMEORIGIN$' <<<"$apih" || fail "/v1 lost the security_headers snippet"

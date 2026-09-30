@@ -50,6 +50,7 @@ thuammai pause | resume                      (server-side emergency switch, R28 
 thuammai finish                              (after the Caddy block and DNS / หลังเพิ่ม Caddy และ DNS)
 thuammai caddy add                           (append our site block to the shared Caddyfile — asks first)
 thuammai caddy update [--yes]                (replace our site block with the release's — asks first; --yes or THUAMMAI_ASSUME_YES=1 = no question)
+thuammai caddy remove <host> [--yes]         (delete another host's thuammai block, e.g. the old web proxy — never API_HOST; asks first)
 thuammai kuma                                (Uptime Kuma push URLs)
 thuammai telegram set|delete                 (webhook)
 thuammai telegram token [--file <path>]      (bot token from stdin, a hidden prompt or a file — never an argument)
@@ -181,8 +182,8 @@ cmd_install() {
     fetch_bundle "$from" "$noni"
     env_set THUAMMAI_HOME "$TH"; env_set THUAMMAI_UID "$(id -u)"; env_set THUAMMAI_GID "$(id -g)"; env_set IMAGE_TAG "$tag"; env_set FINISHED 0
   fi
-  env_default SITE_ORIGIN https://thaiglider.github.io
-  env_default SITE_URL https://thaiglider.github.io/thuammai/
+  env_default SITE_ORIGIN https://flood.thaiglider.com
+  env_default SITE_URL https://flood.thaiglider.com/
   env_default PUBLIC_URL https://flood.thaiglider.com/
   env_default ALERTS_PAUSED 0
   env_default LINE_OFF 0
@@ -192,7 +193,7 @@ cmd_install() {
   env_default KUMA_BASE_URL http://uptime-kuma:3001
   env_default FINISHED 0
   if [ -z "$(env_get API_HOST)" ]; then
-    if [ "$noni" = 1 ]; then host="${API_HOST:-flood.thaiglider.com}"; else host="$(ask 'API_HOST — the API domain / โดเมนของ API [flood.thaiglider.com]: ')" || host=""; host="${host:-flood.thaiglider.com}"; fi
+    if [ "$noni" = 1 ]; then host="${API_HOST:-flood-api.thaiglider.com}"; else host="$(ask 'API_HOST — the API domain / โดเมนของ API [flood-api.thaiglider.com]: ')" || host=""; host="${host:-flood-api.thaiglider.com}"; fi
     valid_host "$host" || die "API_HOST must be a plain lower-case host name like flood.example.com (no *, port, comma, space, # or &) / API_HOST ต้องเป็นชื่อโดเมนธรรมดา"
     env_set API_HOST "$host"
   fi
@@ -292,7 +293,7 @@ cmd_install() {
   fi
   say ""
   say "installed (release $tag). Next (owner guide docs/ops/vps-owner-setup.md) / ขั้นต่อไป:"
-  say "  1. DNS: A record 'flood' → this VPS (Proxied if the host firewall admits only Cloudflare — then CLIENT_IP_MODE=cloudflare and CADDY_TLS_DNS in .env; owner guide step 2)"
+  say "  1. DNS: A record 'flood-api' → this VPS (Proxied if the host firewall admits only Cloudflare — then CLIENT_IP_MODE=cloudflare and CADDY_TLS_DNS in .env; owner guide step 2)"
   say "  2. thuammai caddy add      (shows the block and a diff, asks before touching the shared Caddyfile)"
   say "  3. thuammai finish"
   say "  GitHub variables: ALERTS_ORIGIN=https://$(env_get API_HOST)  VAPID_PUBLIC_KEY=$(env_get VAPID_PUBLIC_KEY)  TELEGRAM_BOT_USERNAME=$(env_get TELEGRAM_BOT_USERNAME)"
@@ -302,10 +303,13 @@ cmd_install() {
 # security_headers) into CADDY_BLOCK. Called without a subshell so that die stops the command; a
 # missing template or an empty/odd result must never reach the shared Caddyfile.
 caddy_block_build() {
-  local file="$1" host="$2" tlsdns block tpl
+  local file="$1" host="$2" tlsdns block tpl pub
   tpl="$(release_dir "$(current_tag)")/caddy/site-block.caddy"
   [ -r "$tpl" ] || die "cannot read the site block template $tpl — nothing changed"
-  block="$(sed "s#@API_HOST@#$host#g; s#@THUAMMAI_HOME@#$TH#g" "$tpl")" || die "could not build the site block from $tpl — nothing changed"
+  pub="$(env_get PUBLIC_URL)"
+  [[ "$pub" =~ ^https://[^\ ]+/$ ]] || die "PUBLIC_URL in $TH/.env must be an https URL ending in / (now: '$pub') — nothing changed"
+  [[ "$pub" =~ [^A-Za-z0-9./:_~%?=+@-] ]] && die "PUBLIC_URL in $TH/.env has a character that does not belong in a URL — nothing changed"
+  block="$(sed "s#@API_HOST@#$host#g; s#@THUAMMAI_HOME@#$TH#g; s#@PUBLIC_URL@#$pub#g" "$tpl")" || die "could not build the site block from $tpl — nothing changed"
   # A shared Caddy that proves domains by DNS-01 per zone (its firewall lets only Cloudflare in, so
   # HTTP-01/TLS-ALPN cannot work) needs the same `tls { dns … }` as its other sites in this zone.
   tlsdns="$(env_get CADDY_TLS_DNS)"
@@ -396,9 +400,9 @@ cmd_caddy_add() {
   rm -f "$new" "$snap"
 }
 
-# caddy update [--yes]: replace our existing block with the release's (the block now serves the web
-# too). The block starts at the "# thuammai — flood alerts API" comment right before "$host {" (any
-# text after it) and ends at the first "}" in column 0; the rest of the file is copied unchanged.
+# caddy update [--yes]: replace our existing block with the release's. The block starts at the
+# "# thuammai — flood alerts API" comment right before "$host {" (any text after it) and ends at the
+# first "}" in column 0; the rest of the file is copied unchanged.
 # THUAMMAI_ASSUME_YES=1 is the same as --yes (for ssh without a terminal).
 cmd_caddy_update() {
   local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host block new snap blockf ans yes=0 n
@@ -446,6 +450,56 @@ cmd_caddy_update() {
   yes_no "$ans" || { rm -f "$new" "$blockf" "$snap"; say "nothing changed / ไม่ได้แก้ไขอะไร"; return 0; }
   caddy_apply "$file" "$new" updated "$snap"
   rm -f "$new" "$blockf" "$snap"
+}
+
+# caddy remove <host> [--yes]: delete one "# thuammai — flood alerts API" block (the old web proxy of
+# stage ก) with the same locate/overrun rules as update. Never the block of the current API_HOST.
+cmd_caddy_remove() {
+  local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host="" new snap ans yes=0 n rc
+  while [ $# -gt 0 ]; do
+    case "$1" in --yes) yes=1 ;; -*) die "thuammai caddy remove <host> [--yes]" ;; *) [ -z "$host" ] || die "thuammai caddy remove <host> [--yes]"; host="$1" ;; esac
+    shift
+  done
+  [ -n "$host" ] || die "thuammai caddy remove <host> [--yes]"
+  [ "${THUAMMAI_ASSUME_YES:-}" = 1 ] && yes=1
+  valid_host "$host" || die "'$host' is not a plain host name (no *, port, comma, space, # or &) — nothing changed"
+  caddy_prepare "$file"
+  [ "$host" != "$CADDY_HOST" ] || die "$host is the current API_HOST — refusing to remove the block that serves the API; nothing changed / นี่คือ API_HOST ปัจจุบัน ไม่ลบ"
+  n="$(grep -cxF "$host {" "$file" || true)"
+  [ "$n" = 1 ] || die "expected exactly one '$host {' block in $file, found $n — nothing changed / ไม่พบบล็อกของ $host เพียงหนึ่งอัน — ไม่ได้แก้ไขอะไร"
+  caddy_dest "$file"
+  new="$(mktemp "$TH/run/Caddyfile.new.XXXXXX")"
+  snap="$(mktemp "$TH/run/Caddyfile.snap.XXXXXX")"
+  CLEANUP+=("$new" "$snap")
+  cp "$file" "$snap"
+  awk -v host="$host {" '
+    { lines[NR] = $0 }
+    END {
+      h = 0
+      for (i = 1; i <= NR; i++) if (lines[i] == host) { h = i; break }
+      s = h
+      if (h > 1 && lines[h-1] ~ /^# thuammai — flood alerts API/) s = h - 1
+      else exit 5
+      e = 0
+      for (i = h + 1; i <= NR; i++) {
+        if (lines[i] ~ /^}[[:space:]]*(#.*)?$/) { e = i; break }
+        if (lines[i] ~ /^[^[:space:]#]/) exit 4
+      }
+      if (!h || !e) exit 3
+      for (i = 1; i < s; i++) print lines[i]
+      for (i = e + 1; i <= NR; i++) print lines[i]
+    }' "$snap" >"$new" || {
+    rc=$?
+    [ "$rc" = 5 ] && die "$host is not a thuammai block (no '# thuammai — flood alerts API' comment right above it) — nothing changed / ไม่ใช่บล็อกของ thuammai — ไม่ได้แก้ไขอะไร"
+    die "could not find the end of the $host block (a '}' in column 0 before the next site) — nothing changed"
+  }
+  say "---- diff -u ----"
+  diff -u --label "$file" --label "$file (new)" "$file" "$new" || true
+  say "-------------------------"
+  if [ "$yes" = 1 ]; then ans=y; else ans="$(ask "Remove this block, validate and then reload the shared caddy? / ลบบล็อกนี้แล้วตรวจและรีโหลด caddy? [y/N]: ")" || ans=""; fi
+  yes_no "$ans" || { rm -f "$new" "$snap"; say "nothing changed / ไม่ได้แก้ไขอะไร"; return 0; }
+  caddy_apply "$file" "$new" removed "$snap"
+  rm -f "$new" "$snap"
 }
 
 cmd_finish() {
@@ -805,7 +859,8 @@ main() {
       case "${1:-}" in
         add) cmd_caddy_add ;;
         update) shift; cmd_caddy_update "$@" ;;
-        *) die "thuammai caddy add | caddy update [--yes]" ;;
+        remove) shift; cmd_caddy_remove "$@" ;;
+        *) die "thuammai caddy add | caddy update [--yes] | caddy remove <host> [--yes]" ;;
       esac
       ;;
     kuma) cmd_kuma ;;

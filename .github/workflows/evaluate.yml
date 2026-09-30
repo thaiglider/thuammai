@@ -8,7 +8,7 @@ concurrency:
   group: evaluate
   cancel-in-progress: false
 env:
-  SITE_URL: https://thaiglider.github.io/thuammai
+  SITE_URL: https://flood.thaiglider.com
 jobs:
   evaluate:
     runs-on: ubuntu-latest
