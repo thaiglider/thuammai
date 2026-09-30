@@ -36,6 +36,8 @@
 			# One field per line: header_up with more words is a set/replace, not a list of deletes.
 			header_up -X-Forwarded-For
 			header_up -Cf-Connecting-Ip
+			header_up -Cf-Connecting-Ipv6
+			header_up -Cf-Pseudo-Ipv4
 			header_up -True-Client-Ip
 			header_up -X-Real-Ip
 			header_up -Cf-Ipcountry

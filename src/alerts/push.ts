@@ -84,7 +84,9 @@ export async function sendPush(items: Planned[], gen: string, send: SendNotifica
     const payload = pushPayload(p.msg, key, gen);
     if (Buffer.byteLength(payload, 'utf8') > PUSH_PAYLOAD_MAX_BYTES) return 'oversize';
     const clear = p.kind === 'clear';
-    const opts: PushOptions = { TTL: clear ? PUSH_TTL_S.clear : PUSH_TTL_S.alert, urgency: clear ? 'normal' : 'high', topic: pushTopic(key), timeout: 10_000, vapidDetails: vapid };
+    // Own Topic: a trend must never replace a queued level alert for the same place.
+    const trend = p.msg.kind === 'trend';
+    const opts: PushOptions = { TTL: clear ? PUSH_TTL_S.clear : trend ? PUSH_TTL_S.trend : PUSH_TTL_S.alert, urgency: clear || trend ? 'normal' : 'high', topic: pushTopic(trend ? `${key}|trend` : key), timeout: 10_000, vapidDetails: vapid };
     for (let attempt = 0; attempt < 2; attempt++) {
       let status: number | null;
       let retryAfterS = 1;

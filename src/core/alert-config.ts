@@ -8,7 +8,9 @@ export const ALERT = {
   maxSnapshotAgeMin: 30,   // snapshot or a carried water source older than this → silence
   keyDecimals: 3,          // stored coordinates are rounded to 3 decimals (~110 m)
 } as const;
-export const PUSH_TTL_S = { alert: 10_800, clear: 3_600 } as const;
+/** Trend alerts (H4 spec §2): how long a trend must persist, and the gap between two trend alerts (per follower × place). */
+export const TREND_ALERT = { holdMin: 30, minGapMin: 180, afterAlertMin: 60 } as const;
+export const PUSH_TTL_S = { alert: 10_800, clear: 3_600, trend: 10_800 } as const;
 export const CAPS = {
   placesPerTarget: 10,
   // Phase 3A (spec §7.5, R18): no D1 quota any more; bounded by the RAM given to `alerts` (perf test).

@@ -5,7 +5,7 @@ import { pointAnswerText, type Stored } from './answer';
 import { lineFor, sendLine } from './line';
 import type { LineRepo } from './line-repo';
 import { errorCounts, type Counts, type LogEvent } from './log';
-import { capPlanned, evaluatePointsYielding, keysToQuery, planFollows, recomputeEp, toUpdate, type Planned, type PointEval } from './plan';
+import { capPlanned, evaluatePointsYielding, isTrendKind, keysToQuery, planFollows, recomputeEp, toUpdate, type Planned, type PointEval } from './plan';
 import { newPushRun, sendPush, type PushRun, type SendNotification, type Vapid } from './push';
 import { RepoError, type AlertRepo, type FollowRow, type PendingRow } from './repo';
 import type { Snapshot } from './snapshot';
@@ -19,6 +19,8 @@ export interface AlertEnv {
   PUBLIC_URL?: string;
   /** LINE is on only with this token and SITE_URL (and a LineRepo). */
   LINE_CHANNEL_TOKEN?: string;
+  /** '0' turns trend alerts (H4) off: no trend is evaluated and every place's trend run is cleared. Default on. */
+  TREND_ALERTS?: string;
 }
 export interface AlertDeps {
   repo: AlertRepo; env: AlertEnv;
@@ -47,6 +49,9 @@ const chunks = <T>(xs: T[], n: number): T[][] => {
   return out;
 };
 const add = (counts: Counts, more: Counts) => { for (const [k, v] of Object.entries(more)) counts[k] = (counts[k] ?? 0) + v; };
+
+/** Trend alerts are on unless TREND_ALERTS is exactly '0'. */
+export const trendAlertsOn = (e: Pick<AlertEnv, 'TREND_ALERTS'>): boolean => e.TREND_ALERTS !== '0';
 
 /** The base of every link in a message: PUBLIC_URL, else SITE_URL, with a trailing slash. */
 export function linkBase(e: Pick<AlertEnv, 'SITE_URL' | 'PUBLIC_URL'>): string {
@@ -94,14 +99,18 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
     return bad ?? { event: 'skip', counts, exitCode: 0 };
   }
 
-  const ev = await evaluatePointsYielding(snap, places, prev);
+  const trendOn = trendAlertsOn(d.env);
+  const ev = await evaluatePointsYielding(snap, places, prev, 1000, trendOn);
   add(counts, ev.counts);
-  const queried = keysToQuery(ev.points, snap.gen);
+  const queried = keysToQuery(ev.points, snap.gen, trendOn);
   const follows: FollowRow[] = await d.repo.targets(queried);
-  const planned = planFollows(follows, ev.points, snap.gen);
+  const planned = planFollows(follows, ev.points, snap.gen, trendOn);
   const line = lineFor(d);
   const capped = capPlanned(planned, { push: CAPS.pushPerRun, tg: CAPS.tgPerRun, line: LINE.maxApproved * LINE.placesPerUser }, { push: true, tg: tg !== null, line: line !== null });
-  for (const p of capped.send) counts[p.kind!] = (counts[p.kind!] ?? 0) + 1;
+  for (const p of capped.send) {
+    counts[p.kind!] = (counts[p.kind!] ?? 0) + 1;
+    if (isTrendKind(p.kind)) counts.trend = (counts.trend ?? 0) + 1;
+  }
   counts.deferred = capped.deferred;
 
   const written = new Map<number, FollowState>();

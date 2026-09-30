@@ -1,4 +1,5 @@
 import type { PointState } from '../core/alert-rule';
+import type { TrendFollow } from '../core/trend-alert';
 import type { Counts } from './log';
 
 /* Where the alerts logic reads and writes (spec §6.2, R7). No driver import here: src/alerts runs
@@ -10,8 +11,10 @@ export interface FollowRow {
   /** LINE user id of a 'line' target (phase 3C). */
   lineUser: string | null;
   alerted: 0 | 3 | 4; lastAlertAt: string | null; lastL4At: string | null; lastClearAt: string | null;
+  /** Trend alerts (H4): null on rows written before 0005 or by an older image. */
+  trendNote: TrendFollow['trendNote']; trendAt: string | null;
 }
-export interface FollowUpdate { fid: number; alerted: 0 | 3 | 4; lastAlertAt: string | null; lastL4At: string | null; lastClearAt: string | null }
+export interface FollowUpdate { fid: number; alerted: 0 | 3 | 4; lastAlertAt: string | null; lastL4At: string | null; lastClearAt: string | null; trendNote: TrendFollow['trendNote']; trendAt: string | null }
 export interface Report { follows: FollowUpdate[]; deadTargets: number[]; donePending: number[] }
 export interface PendingRow { id: number; chat: number; k: string; lat: number; lon: number; createdAt: string }
 /** Place-level alert state (phase-2 spec §3) — rows of point_state plus alert_run.gen. */

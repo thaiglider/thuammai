@@ -1,10 +1,14 @@
 import { ALERT } from './alert-config';
 import { alertShown, type PlaceHyst, type Shown } from './hysteresis';
+import type { TrendPoint } from './trend-alert';
 import type { Level } from './types';
 
 /** One place's entry in the alert-state blob (spec §3): hysteresis times, the start of the
- *  current "shown <3 with usable data" run, and whether some follower is inside an alert episode. */
-export interface PointState extends PlaceHyst { below?: string; ep?: 1 }
+ *  current "shown <3 with usable data" run, and whether some follower is inside an alert episode;
+ *  plus the current trend run (trend-alerts spec §2.1). stepPoint does not manage tr/trSince (it
+ *  carries them on an unusable snapshot and drops them otherwise); the alerts job always sets them
+ *  itself from stepTrend. */
+export interface PointState extends PlaceHyst, TrendPoint { below?: string; ep?: 1 }
 export type PointInputState = { snapshotOk: false } | { snapshotOk: true; raw: Level; incomplete: boolean };
 export interface PointStep { shown: Shown | null; valid: boolean; below?: string; next: PointState }
 

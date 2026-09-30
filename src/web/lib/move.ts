@@ -32,9 +32,12 @@ export const PROBE_TIMEOUT_MS = 3_000;
  *  minus those already saved. */
 export function departPlan(o: { saved: Place[]; fromLink: Place[]; movedOnce: boolean }): { places: Place[]; incoming: Place[]; sendSettings: boolean } {
   const known = new Set(o.saved.map(placeKey));
+  const fromLink = o.fromLink.filter((p) => !known.has(placeKey(p)));
+  // After the first move the saved places are only offered (the new host's import banner hides the
+  // ones already saved there), so a move that failed after the probe never strands them here.
   return {
     places: o.movedOnce ? [] : o.saved,
-    incoming: o.fromLink.filter((p) => !known.has(placeKey(p))),
+    incoming: o.movedOnce ? [...o.saved, ...fromLink] : fromLink,
     sendSettings: !o.movedOnce,
   };
 }

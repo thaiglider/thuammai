@@ -133,13 +133,16 @@ function placeLabel(names, key) {
 async function showAlert(data) {
   let p = null;
   try { p = data ? data.json() : null; } catch { /* not JSON */ }
-  const ok = p && p.v === 1 && (p.t === 'alert' || p.t === 'clear') && typeof p.k === 'string' && typeof p.title === 'string' && typeof p.body === 'string';
+  const ok = p && p.v === 1 && (p.t === 'alert' || p.t === 'clear' || p.t === 'trend') && typeof p.k === 'string' && typeof p.title === 'string' && typeof p.body === 'string';
   if (!ok) {
     return self.registration.showNotification('ท่วมไหม', { body: 'มีการเปลี่ยนแปลงที่จุดที่คุณติดตาม — แตะเพื่อดู', icon: './icon-192.png', data: { url: './' } });
   }
+  // A trend note travels as t:'alert' + x:'trend' (so workers installed before it existed still show it).
+  const trend = p.t === 'trend' || p.x === 'trend';
   const name = placeLabel(await alertNames(), p.k);
   return self.registration.showNotification(`${name}: ${p.title}`, {
-    body: p.body, tag: p.k, renotify: p.t === 'alert', requireInteraction: p.l === 4, icon: './icon-192.png', data: { url: './' },
+    body: p.body, tag: trend ? `${p.k}:trend` : p.k, renotify: p.t !== 'clear', requireInteraction: p.l === 4 && !trend, // a trend is not an alarm: never pin it (p.l is the shown level)
+    icon: './icon-192.png', data: { url: './' },
   });
 }
 
