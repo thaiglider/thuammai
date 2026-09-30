@@ -4,7 +4,7 @@ import { gunzipSync } from 'node:zlib';
 import { getJson, getText } from './http';
 
 export interface Fetcher {
-  json(url: string, headers?: Record<string, string>): Promise<unknown>;
+  json(url: string, headers?: Record<string, string>, opts?: { timeoutMs?: number; retries?: number }): Promise<unknown>;
   text(url: string, headers?: Record<string, string>): Promise<string>;
   /** POST a form body once (no retry) and parse JSON; optional so test doubles may omit it. */
   postJson?(url: string, body: string, opts?: { timeoutMs?: number }): Promise<unknown>;
@@ -12,7 +12,7 @@ export interface Fetcher {
 
 export function liveFetcher(): Fetcher {
   return {
-    json: (url, headers) => getJson(url, { headers }),
+    json: (url, headers, opts) => getJson(url, { headers, ...opts }),
     text: (url, headers) => getText(url, { headers }),
     postJson: async (url, body, opts) => {
       const text = await getText(url, {

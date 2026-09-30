@@ -99,6 +99,17 @@ export function parseRoad(raw: any, now: Date): RawObs[] {
   return out;
 }
 
+/** Bank and BMA critical-level validation shared by ThaiWater and the BMA relay. */
+export function canalFields(bankRaw: number | undefined, warn: number | undefined, crit: number | undefined):
+  { bank?: number; bmaCrit?: number; flags: Flag[] } {
+  const flags: Flag[] = [];
+  const bank = bankRaw !== undefined && bankRaw > CANAL.bankMin && bankRaw < CANAL.bankMax ? bankRaw : undefined;
+  if (bank === undefined) flags.push('bank_invalid');
+  const bmaCrit = warn !== undefined && crit !== undefined && warn > 0 && crit > warn ? crit : undefined;
+  if (bmaCrit === undefined) flags.push('bma_thresh_invalid');
+  return { bank, bmaCrit, flags };
+}
+
 export function parseCanal(raw: any, now: Date): RawObs[] {
   const out: RawObs[] = [];
   for (const x of raw?.data ?? []) {
@@ -109,13 +120,9 @@ export function parseCanal(raw: any, now: Date): RawObs[] {
     const t = validTime(x.canal_datetime, lat, lon, now);
     if (v === undefined || !t) continue;
     const flags: Flag[] = [];
-    const bankRaw = num(st.bank);
-    const bank = bankRaw !== undefined && bankRaw > CANAL.bankMin && bankRaw < CANAL.bankMax ? bankRaw : undefined;
-    if (bank === undefined) flags.push('bank_invalid');
-    const warn = num(st.warning_level);
-    const crit = num(st.critical_level);
-    const bmaCrit = warn !== undefined && crit !== undefined && warn > 0 && crit > warn ? crit : undefined;
-    if (bmaCrit === undefined) flags.push('bma_thresh_invalid');
+    const cf = canalFields(num(st.bank), num(st.warning_level), num(st.critical_level));
+    flags.push(...cf.flags);
+    const { bank, bmaCrit } = cf;
     const vOut = num(x.canal_out);
     if (vOut !== undefined && vOut > 0 && vOut >= v) flags.push('backflow');
     const code = st.canal_oldcode || String(st.id);

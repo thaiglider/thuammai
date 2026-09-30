@@ -6,7 +6,7 @@ import type { IpMode } from './client-ip';
 
 export interface ApiConfig {
   port: number; siteOrigins: readonly string[]; siteUrl: string; /** Links in bot messages (defaults to siteUrl). */ publicUrl: string; rateKey: string;
-  tgToken?: string; tgSecret?: string; lineSecret?: string; lineToken?: string; lineOff: boolean; paused: boolean; ipMode: IpMode; trustedProxyHost: string; db: PgConn;
+  tgToken?: string; tgSecret?: string; lineSecret?: string; lineToken?: string; relayKey?: string; relayToken?: string; lineOff: boolean; paused: boolean; ipMode: IpMode; trustedProxyHost: string; db: PgConn;
   /** CI only: the "broken image" of the update/rollback test exits at start (Plan F2). */
   ciBreak: boolean;
 }
@@ -52,7 +52,7 @@ export function loadApiConfig(e: NodeJS.ProcessEnv, read: SecretReader): ConfigR
     cfg: {
       port: Number(e.PORT || 8080), siteOrigins, siteUrl, publicUrl, rateKey,
       tgToken: read('TELEGRAM_BOT_TOKEN'), tgSecret: read('TELEGRAM_WEBHOOK_SECRET'),
-      lineSecret: read('LINE_CHANNEL_SECRET'), lineToken: read('LINE_CHANNEL_TOKEN'), lineOff: e.LINE_OFF === '1',
+      lineSecret: read('LINE_CHANNEL_SECRET'), lineToken: read('LINE_CHANNEL_TOKEN'), relayKey: read('RELAY_HMAC_KEY'), relayToken: read('RELAY_READ_TOKEN'), lineOff: e.LINE_OFF === '1',
       paused: e.ALERTS_PAUSED === '1', ipMode: mode, trustedProxyHost: e.TRUSTED_PROXY_HOST || 'caddy', db, ciBreak: e.CI_BREAK === '1',
     },
   };

@@ -16,7 +16,7 @@ const SOURCE_TH: Record<string, string> = {
   river: 'ระดับน้ำแม่น้ำ — สสน. (ThaiWater)', rain: 'ฝน — สสน. (ThaiWater)', road: 'น้ำบนถนน กทม. — สสน. (ThaiWater)',
   canal: 'ระดับน้ำคลอง กทม. — สสน. (ThaiWater)', dam: 'เขื่อน — สสน. (ThaiWater)', longdo: 'เหตุการณ์บนถนน — Longdo Traffic',
   traffy: 'ประชาชนแจ้ง — Traffy Fondue (ยังไม่ยืนยัน)', forecast: 'พยากรณ์ฝน — Open-Meteo', tmd: 'ประกาศเตือน — กรมอุตุนิยมวิทยา',
-  hospitals: 'โรงพยาบาล (OSM)',
+  hospitals: 'โรงพยาบาล (OSM)', bma: 'กทม. (relay)',
 };
 
 export async function renderPage(tab: Exclude<Tab, 'home' | 'map'>, ctx: AppCtx): Promise<void> {
@@ -84,8 +84,8 @@ function sources(ctx: AppCtx, main: HTMLElement): void {
   const table = h('table', { 'data-testid': 'sources-table' },
     h('thead', {}, h('tr', {}, h('th', {}, 'แหล่ง'), h('th', {}, 'สถานะ'))),
     h('tbody', {}, ...m.sources.map((s) => h('tr', {},
-      h('td', {}, SOURCE_TH[s.id] ?? s.id),
-      h('td', {}, s.ok ? `ปกติ · ${s.count} รายการ${s.lagMin !== null ? ` · ช้า ${s.lagMin} นาที` : ''}`
+      h('td', {}, s.viaBma ? (SOURCE_TH[s.id] ?? s.id).replace('สสน. (ThaiWater)', 'สสน. + กทม.') : SOURCE_TH[s.id] ?? s.id),
+      h('td', {}, s.ok ? `ปกติ · ${s.count} รายการ${s.lagMin !== null ? ` · ช้า ${s.lagMin} นาที` : ''}${s.viaBma && s.twLagMin != null && s.twLagMin > 60 ? ` · สสน. ค้าง ${Math.round(s.twLagMin / 60)} ชม. — ใช้ข้อมูล กทม.` : ''}${s.viaBma && s.error ? ` (สสน.: ${s.error})` : ''}`
         : s.carriedFrom ? `ใช้ข้อมูลค้างจาก ${fmtDateTime(s.carriedFrom)} (${s.error ?? 'ดึงไม่สำเร็จ'})` : `ดึงไม่สำเร็จ (${s.error ?? ''})`)))));
   const skillBox = h('section', { 'data-testid': 'skill' }, h('h2', {}, 'ความแม่นย้อนหลัง'), h('p', { class: 'muted' }, 'กำลังโหลด…'));
   main.append(h('section', {},

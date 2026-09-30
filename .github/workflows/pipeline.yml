@@ -75,6 +75,7 @@ jobs:
           fi
       - env:
           PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+          RELAY_READ_TOKEN: ${{ secrets.RELAY_READ_TOKEN }}
         run: npm run pipeline -- --out dist --state .cache/state.json --site "$SITE_URL" --skill .cache/skill/skill.json
       - uses: actions/cache/save@v4
         if: always()

@@ -12,5 +12,5 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "tests", "server", "vitest.config.ts", "vite.config.ts", "playwright.config.ts"]
+  "include": ["src", "tests", "server", "relay", "vitest.config.ts", "vite.config.ts", "playwright.config.ts"]
 }

@@ -63,7 +63,7 @@ export interface Hospital { osmId: string; name: string; lat: number; lon: numbe
 
 export interface TmdWarning { title: string; body: string; issued: string | null }
 
-export type SourceId = 'river' | 'rain' | 'road' | 'canal' | 'dam' | 'longdo' | 'traffy' | 'forecast' | 'tmd' | 'hospitals';
+export type SourceId = 'river' | 'rain' | 'road' | 'canal' | 'dam' | 'longdo' | 'traffy' | 'forecast' | 'tmd' | 'hospitals' | 'bma';
 
 export interface SourceHealth {
   id: SourceId;
@@ -74,6 +74,9 @@ export interface SourceHealth {
   windowH?: number;
   error?: string;
   carriedFrom?: string;
+  /** road/canal: the BMA relay contributed to this merged source; twLagMin is ThaiWater's own lag. */
+  viaBma?: boolean;
+  twLagMin?: number | null;
 }
 
 /** Fresh rain station that reported zero rain: [lat, lon] (province given by the file it is in). */

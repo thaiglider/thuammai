@@ -63,6 +63,8 @@ services:
       TELEGRAM_WEBHOOK_SECRET_FILE: /run/secrets/telegram_webhook_secret
       LINE_CHANNEL_SECRET_FILE: /run/secrets/line_channel_secret
       LINE_CHANNEL_TOKEN_FILE: /run/secrets/line_channel_token
+      RELAY_HMAC_KEY_FILE: /run/secrets/relay_hmac_key
+      RELAY_READ_TOKEN_FILE: /run/secrets/relay_read_token
       LINE_OFF: ${LINE_OFF:-0}
       SITE_ORIGIN: ${SITE_ORIGIN:-}
       SITE_URL: ${SITE_URL:-}
@@ -70,7 +72,7 @@ services:
       ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
       CLIENT_IP_MODE: ${CLIENT_IP_MODE:-direct}
       TRUSTED_PROXY_HOST: ${TRUSTED_PROXY_HOST:-caddy}
-    secrets: [pg_app, rate_hmac_key, telegram_bot_token, telegram_webhook_secret, line_channel_secret, line_channel_token]
+    secrets: [pg_app, rate_hmac_key, telegram_bot_token, telegram_webhook_secret, line_channel_secret, line_channel_token, relay_hmac_key, relay_read_token]
     tmpfs: ["/tmp:size=16m,mode=1777"]
     networks:
       internal: {}
@@ -249,6 +251,8 @@ secrets:
   telegram_webhook_secret: { file: "${THUAMMAI_HOME:?}/secrets/telegram_webhook_secret" }
   line_channel_secret: { file: "${THUAMMAI_HOME:?}/secrets/line_channel_secret" }
   line_channel_token: { file: "${THUAMMAI_HOME:?}/secrets/line_channel_token" }
+  relay_hmac_key: { file: "${THUAMMAI_HOME:?}/secrets/relay_hmac_key" }
+  relay_read_token: { file: "${THUAMMAI_HOME:?}/secrets/relay_read_token" }
   kuma_push_alerts: { file: "${THUAMMAI_HOME:?}/secrets/kuma_push_alerts" }
   restic_password: { file: "${THUAMMAI_HOME:?}/secrets/restic_password" }
   restic_repository: { file: "${THUAMMAI_HOME:?}/secrets/restic_repository" }

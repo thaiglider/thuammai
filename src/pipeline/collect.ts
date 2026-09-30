@@ -1,8 +1,9 @@
-import { HOSPITAL, MIN_COUNT, TRAFFY } from '../core/thresholds';
+import { FRESH_MIN, HOSPITAL, MIN_COUNT, TRAFFY } from '../core/thresholds';
 import { ageMin, toIso07 } from '../core/time';
 import type { FloodEvent, ForecastPoint, Hospital, RawObs, SourceHealth, SourceId, TmdWarning } from '../core/types';
 import type { Fetcher } from './fetcher';
 import { THAIWATER_HEADERS } from './http';
+import { RELAY_URL_DEFAULT, fetchBma, mergeNewer } from './sources/bma-relay';
 import { LONGDO_URL, parseLongdo } from './sources/longdo';
 import { forecastPoints, openMeteoUrl, parseOpenMeteo } from './sources/openmeteo';
 import { TW_URL, parseCanal, parseDam, parseRain, parseRiver, parseRoad } from './sources/thaiwater';
@@ -10,7 +11,7 @@ import { TMD_URL, parseTmd } from './sources/tmd';
 import { OVERPASS_URL, overpassBody, parseOverpassHospitals } from './sources/osm-hospitals';
 import { fetchTraffy } from './sources/traffy';
 import type { PipelineState } from './state';
-import type { StaticData } from './static-data';
+import { provinceAt, type StaticData } from './static-data';
 
 export interface Collected {
   river: RawObs[]; rain: RawObs[]; road: RawObs[]; canal: RawObs[]; dam: RawObs[];
@@ -22,7 +23,7 @@ export interface Collected {
 
 /** A forecast fetched less than this long ago is reused instead of calling Open-Meteo again. */
 const FORECAST_REUSE_MIN = 60;
-const HEALTH_ORDER: SourceId[] = ['river', 'rain', 'road', 'canal', 'dam', 'longdo', 'traffy', 'forecast', 'tmd', 'hospitals'];
+const HEALTH_ORDER: SourceId[] = ['river', 'rain', 'road', 'canal', 'bma', 'dam', 'longdo', 'traffy', 'forecast', 'tmd', 'hospitals'];
 
 type Timed = { t?: string; start?: string };
 type Result<T> = { items: T[]; health: SourceHealth };
@@ -50,6 +51,7 @@ async function run<T extends Timed>(id: SourceId, st: PipelineState, now: Date, 
 
 export async function collectAll(
   f: Fetcher, st: PipelineState, now: Date, sd: StaticData, sleep?: (ms: number) => Promise<void>,
+  env: Record<string, string | undefined> = process.env,
 ): Promise<Collected> {
   const tw = (url: string) => f.json(url, THAIWATER_HEADERS);
 
@@ -93,22 +95,62 @@ export async function collectAll(
     parseTmd(await f.text(TMD_URL)).map((w) => ({ ...w, t: w.issued ?? undefined })));
 
   const hospitalsP = collectHospitals(f, st, now, sd);
+  const bmaP = collectBma(f, now, env); // in parallel with everything else
 
-  const [tw5, longdo, traffy, forecast, tmdTimed, hospitals] = await Promise.all([thaiwater(), longdoP, traffyP, forecastP, tmdP, hospitalsP]);
+  const [tw5, longdo, traffy, forecast, tmdTimed, hospitals, bma] = await Promise.all([thaiwater(), longdoP, traffyP, forecastP, tmdP, hospitalsP, bmaP]);
+
+  // (f) BMA relay: optional; any failure leaves ThaiWater alone. Merged BEFORE risk scoring, newer reading wins.
+  const road = mergeSource('road', tw5.road, bma.road, bma.health?.ok ?? false, sd, now);
+  const canal = mergeSource('canal', tw5.canal, bma.canal, bma.health?.ok ?? false, sd, now);
 
   const traffyWindowH = st.traffyWindowH ?? 0;
   traffy.health.windowH = traffyWindowH;
-  const byId: Record<SourceId, SourceHealth> = {
-    river: tw5.river.health, rain: tw5.rain.health, road: tw5.road.health, canal: tw5.canal.health, dam: tw5.dam.health,
+  const byId: Record<SourceId, SourceHealth | null> = {
+    river: tw5.river.health, rain: tw5.rain.health, road: road.health, canal: canal.health, bma: bma.health, dam: tw5.dam.health,
     longdo: longdo.health, traffy: traffy.health, forecast: forecast.health, tmd: tmdTimed.health, hospitals: hospitals.health,
   };
   const tmd: TmdWarning[] = tmdTimed.items.map(({ title, body, issued }) => ({ title, body, issued }));
   return {
-    river: tw5.river.items, rain: tw5.rain.items, road: tw5.road.items, canal: tw5.canal.items, dam: tw5.dam.items,
+    river: tw5.river.items, rain: tw5.rain.items, road: road.items, canal: canal.items, dam: tw5.dam.items,
     longdo: longdo.items, traffy: traffy.items, forecast: forecast.items, tmd,
     hospitals: hospitals.items, hospitalsFetchedAt: st.lastGood.hospitals?.at ?? null,
-    health: HEALTH_ORDER.map((id) => byId[id]), traffyWindowH,
+    health: HEALTH_ORDER.map((id) => byId[id]).filter((h): h is SourceHealth => !!h), traffyWindowH,
   };
+}
+
+async function collectBma(f: Fetcher, now: Date, env: Record<string, string | undefined>) {
+  const health: SourceHealth = { id: 'bma', ok: false, count: 0, newest: null, lagMin: null };
+  const out = { road: [] as RawObs[], canal: [] as RawObs[], health };
+  const token = env.RELAY_READ_TOKEN?.trim();
+  if (!token) return { ...out, health: null }; // not configured (fixtures, forks): no entry at all
+  try {
+    const r = await fetchBma(f, token, env.RELAY_URL?.trim() || RELAY_URL_DEFAULT, now);
+    out.road = r.road; out.canal = r.canal;
+    health.ok = true;
+    health.count = r.road.length + r.canal.length;
+    const newest = [...r.road, ...r.canal].map((o) => o.t).sort().at(-1) ?? null;
+    health.newest = newest;
+    health.lagMin = newest ? Math.round(ageMin(newest, now)) : null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    health.error = msg.replace(/\s+for\s+https?:\/\/\S+/g, '').replace(/https?:\/\/\S+/g, '').trim(); // never leak the relay URL
+  }
+  return out;
+}
+
+/** Merge BMA into a ThaiWater road/canal source and re-measure its health on the merged list. BMA-only
+ *  stations are added only inside Bangkok. If ThaiWater failed but enough FRESH BMA items exist, the
+ *  source counts as ok (the ThaiWater error text is kept); carried ThaiWater items never count. */
+function mergeSource(id: 'road' | 'canal', r: Result<RawObs>, bmaItems: RawObs[], bmaOk: boolean, sd: StaticData, now: Date): Result<RawObs> {
+  const { items, bmaUsed } = mergeNewer(r.items, bmaItems, (o) => provinceAt(o.lat, o.lon, sd) === '10');
+  const newest = items.map((o) => o.t).sort().at(-1) ?? null;
+  const health: SourceHealth = { ...r.health, count: items.length, newest, lagMin: newest ? Math.round(ageMin(newest, now)) : null };
+  if (bmaUsed > 0) { health.viaBma = true; health.twLagMin = r.health.lagMin; }
+  if (!health.ok && bmaOk) {
+    const fresh = bmaItems.filter((o) => ageMin(o.t, now) <= FRESH_MIN[id] && provinceAt(o.lat, o.lon, sd) === '10').length;
+    if (fresh >= MIN_COUNT[id]) { health.ok = true; delete health.carriedFrom; }
+  }
+  return { items, health };
 }
 
 function reusedForecast(items: ForecastPoint[], now: Date): Result<ForecastPoint> {

@@ -15,6 +15,9 @@ export interface Env {
   /** LINE Messaging API channel (phase-3C spec §5.1): both or the route answers 503. */
   LINE_CHANNEL_SECRET?: string;
   LINE_CHANNEL_TOKEN?: string;
+  /** BMA relay (Plan M): both secrets or /v1/relay/bma answers 503 relay_off. */
+  RELAY_HMAC_KEY?: string;
+  RELAY_READ_TOKEN?: string;
   /** thuammai line off (G-5). */
   LINE_OFF?: boolean;
   /** Server-side emergency switch (R28). */

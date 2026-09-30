@@ -49,9 +49,9 @@ function assertSafeOutDir(out: string): void {
 }
 
 /** Every water/traffic source failed at once → nothing worth deploying. The weekly 'hospitals'
- *  source is ok:true whenever it is not due, so it must not count. */
+ *  source is ok:true whenever it is not due, and the optional 'bma' relay may be absent, so neither counts. */
 export function isTotalOutage(health: readonly SourceHealth[]): boolean {
-  const live = health.filter((h) => h.id !== 'hospitals');
+  const live = health.filter((h) => h.id !== 'hospitals' && h.id !== 'bma');
   return live.length > 0 && live.every((h) => !h.ok);
 }
 

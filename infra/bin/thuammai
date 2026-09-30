@@ -55,6 +55,7 @@ thuammai kuma                                (Uptime Kuma push URLs)
 thuammai telegram set|delete                 (webhook)
 thuammai telegram token [--file <path>]      (bot token from stdin, a hidden prompt or a file — never an argument)
 thuammai line token [--file <path>] | status | off | on   (LINE: two lines — channel secret, token — from a file or stdin, never an argument)
+thuammai relay keys [--show]                (BMA relay: make the two relay secrets if missing; --show prints them for the owner)
 thuammai admin link | unlink                 (the LINE admin in Telegram: /admin <code>)
 thuammai backup now|export | restore [--yes] <daily/YYYY-MM-DD.dump|predeploy> | restore-test
 thuammai update now | retry <release id|all> | rollback | restart <db|api|alerts>
@@ -695,6 +696,37 @@ cmd_admin_unlink() {
   compose exec -T api node dist/tools/admin.mjs unlink
 }
 
+# relay show: the only place besides secrets show that prints the two relay secrets (--show).
+cmd_relay_show() {
+  printf 'RELAY_HMAC_KEY=%s\n' "$(secret_get relay_hmac_key)"
+  printf 'RELAY_READ_TOKEN=%s\n' "$(secret_get relay_read_token)"
+}
+
+# relay keys [--show]: relay_hmac_key (also put on the Thai relay host) and relay_read_token (the pipeline's
+# GitHub secret RELAY_READ_TOKEN) — random, made once, never replaced. Only --show prints them.
+cmd_relay_keys() {
+  local show=0 s v made=0
+  case "${1:-}" in "") ;; --show) show=1 ;; *) die "thuammai relay keys [--show]" ;; esac
+  lock_env
+  refuse_during_restore
+  for s in relay_hmac_key relay_read_token; do
+    if [ ! -s "$TH/secrets/$s" ]; then
+      v="$(image_run node dist/tools/keys.mjs --random | tr -d '\n')" || v=""
+      [ -n "$v" ] || die "could not generate $s (keys.mjs)"
+      secret_set "$s" "$v"
+      made=1
+    fi
+  done
+  v=""
+  if [ "$made" = 1 ]; then
+    say "relay keys created / สร้างคีย์ relay แล้ว"
+    compose up -d --force-recreate api
+  else
+    say "relay keys already exist / มีคีย์ relay อยู่แล้ว"
+  fi
+  if [ "$show" = 1 ]; then cmd_relay_show; fi
+}
+
 # restart <db|api|alerts>: recreate one service under the ops lock, so it never races an update,
 # a backup or a restore that is using (or has stopped) the same containers.
 cmd_restart() {
@@ -878,6 +910,12 @@ main() {
         off) cmd_line_off ;;
         on) cmd_line_on ;;
         *) die "thuammai line token|status|off|on" ;;
+      esac
+      ;;
+    relay)
+      case "${1:-}" in
+        keys) shift; cmd_relay_keys "$@" ;;
+        *) die "thuammai relay keys [--show]" ;;
       esac
       ;;
     admin)

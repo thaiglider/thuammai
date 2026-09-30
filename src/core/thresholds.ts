@@ -48,7 +48,7 @@ export const CONF = { highRoadKm: 0.5, highCanalKm: 1, highRiverKm: 1, mediumWat
 export const AREA = { minShare: 0.15 } as const;
 
 /** Minimum item counts below which a successful fetch is treated as a failure (outage masked as empty). */
-export const MIN_COUNT = { river: 300, rain: 1000, road: 100, canal: 100, dam: 20, longdo: 0, traffy: 0, forecast: 1, tmd: 0, hospitals: 1000 } as const;
+export const MIN_COUNT = { river: 300, rain: 1000, road: 100, canal: 100, dam: 20, longdo: 0, traffy: 0, forecast: 1, tmd: 0, hospitals: 1000, bma: 0 } as const;
 
 /** OSM hospitals (Plan L): weekly Overpass refresh; card shows up to `max` within `nearKm`. */
 export const HOSPITAL = { refreshDays: 7, minCount: 1000, nearKm: 15, max: 3, retryMin: 60 } as const;

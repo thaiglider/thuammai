@@ -11,7 +11,7 @@ LOCAL_IMAGE="thuammai-local"
 # Our own tag for the Postgres image the db runs (DB_IMAGE in .env): we never retag a public image.
 DB_LOCAL="thuammai-db"
 PROJECT="thuammai"
-SECRET_FILES="pg_superuser pg_owner pg_app rate_hmac_key vapid_private_key telegram_bot_token telegram_webhook_secret kuma_push_alerts kuma_push_backup kuma_push_deploy kuma_push_host restic_password restic_repository restic_env export_passphrase line_channel_secret line_channel_token"
+SECRET_FILES="pg_superuser pg_owner pg_app rate_hmac_key vapid_private_key telegram_bot_token telegram_webhook_secret kuma_push_alerts kuma_push_backup kuma_push_deploy kuma_push_host restic_password restic_repository restic_env export_passphrase line_channel_secret line_channel_token relay_hmac_key relay_read_token"
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 say() { printf '%s\n' "$*"; }
