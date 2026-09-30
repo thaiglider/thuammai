@@ -1,6 +1,6 @@
 import { PUSH_HOST_SUFFIX, PUSH_HOSTS } from './alert-config';
 
-/** Only real push services may ever receive a request from us (checked by the Worker on
+/** Only real push services may ever receive a request from us (checked by the api on
  *  subscribe and again by the alerts job before every send). */
 export function isAllowedPushEndpoint(url: unknown): boolean {
   if (typeof url !== 'string' || url.length > 1024) return false;

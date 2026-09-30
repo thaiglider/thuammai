@@ -6,7 +6,7 @@ import type { Place } from './places';
 import { getJson, setJson, type KV } from './storage';
 
 /* Static (first-render) part of the alerts feature: config, local state and the display rule.
- * Everything that talks to the Worker or the push service is in the lazy alerts-client chunk. */
+ * Everything that talks to the alerts server or the push service is in the lazy alerts-client chunk. */
 
 export interface AlertsCfg { origin: string; vapid: string; tgBot: string }
 export function alertsCfg(): AlertsCfg {
@@ -26,7 +26,7 @@ export const tgBotOk = (c: AlertsCfg): boolean => /^[A-Za-z0-9_]{5,32}$/.test(c.
 export const telegramOffered = (c: AlertsCfg): boolean => pushConfigured(c) && tgBotOk(c);
 export const telegramLink = (c: AlertsCfg): string => `https://t.me/${c.tgBot}`;
 export const TELEGRAM_LINK_TH = 'รับแจ้งเตือนทาง Telegram แทน';
-/** "Full" is shared by both channels (the Worker's caps), so Telegram cannot follow either — but
+/** "Full" is shared by both channels (the alerts server's caps), so Telegram cannot follow either — but
  *  it can still show a point's level (final review M1). */
 export const FULL_WITH_TG_TH = 'ระบบแจ้งเตือนรับผู้ใช้เต็มชั่วคราว — ดูระดับทาง Telegram หรือเปิดเว็บดูเป็นระยะ';
 

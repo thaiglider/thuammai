@@ -51,7 +51,7 @@ function writeServiceWorker(dist: string, alertsOrigin: string): void {
   writeFileSync(swPath, swWithAlerts(out, alertsOrigin));
 }
 
-/** Adds the alerts Worker (spec §6.6) and the public origin (Plan I move check) to the page CSP. */
+/** Adds the alerts server (spec §6.6) and the public origin (Plan I move check) to the page CSP. */
 function connectCsp(alertsOrigin: string, publicOrigin: string): Plugin {
   return { name: 'thuammai-connect-csp', transformIndexHtml: (html) => cspForBuild(html, alertsOrigin, publicOrigin) };
 }

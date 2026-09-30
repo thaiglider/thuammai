@@ -21,7 +21,7 @@ export interface PushDeps {
   caches: CacheStorage | null; timeoutMs?: number;
 }
 export type EnableResult = 'ok' | 'denied' | 'browser' | 'unavailable' | 'rate' | 'limited' | 'full';
-/** `paused`: local state is on but nothing can be delivered (I3); `limited`: the Worker's per-day
+/** `paused`: local state is on but nothing can be delivered (I3); `limited`: the alerts server's per-day
  *  new-places cap — no retry before the next UTC day (m4). */
 export type SyncResult = 'off' | 'unchanged' | 'ok' | 'failed' | 'removed' | 'revoked' | 'paused' | 'limited';
 
@@ -44,7 +44,7 @@ export function serverPlaces(places: readonly Place[]): { lat: number; lon: numb
   return [...out.values()];
 }
 
-/** Next 00:00 UTC — the Worker's day for its per-target new-places counter. */
+/** Next 00:00 UTC — the alerts server's day for its per-target new-places counter. */
 export function nextUtcDay(now: Date): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)).toISOString();
 }

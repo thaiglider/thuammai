@@ -7,15 +7,15 @@ import { ALERTS_ORIGIN_RE } from '../core/alert-config';
 export function alertsOriginForBuild(raw: string | undefined): { origin: string; warning: string | null } {
   if (!raw) return { origin: '', warning: null };
   if (ALERTS_ORIGIN_RE.test(raw)) return { origin: raw, warning: null };
-  return { origin: '', warning: 'VITE_ALERTS_ORIGIN is not an https:// origin with no path (e.g. https://thuammai-alerts.example.workers.dev) — building with alerts OFF' };
+  return { origin: '', warning: 'VITE_ALERTS_ORIGIN is not an https:// origin with no path (e.g. https://flood.thaiglider.com) — building with alerts OFF' };
 }
 
-/** index.html with the alerts Worker origin appended to connect-src (spec §6.6); byte-for-byte
+/** index.html with the alerts server origin appended to connect-src (spec §6.6); byte-for-byte
  *  unchanged when alerts are off. Callers pass an origin from alertsOriginForBuild; anything else
  *  invalid still throws (never widen the CSP with a bad value). */
 export function cspWithAlerts(html: string, origin: string | undefined): string {
   if (!origin) return html;
-  if (!ALERTS_ORIGIN_RE.test(origin)) throw new Error('VITE_ALERTS_ORIGIN must be an https:// origin with no path, e.g. https://thuammai-alerts.example.workers.dev');
+  if (!ALERTS_ORIGIN_RE.test(origin)) throw new Error('VITE_ALERTS_ORIGIN must be an https:// origin with no path, e.g. https://flood.thaiglider.com');
   const out = html.replace(/(connect-src [^;"]*)/, `$1 ${origin}`);
   if (out === html) throw new Error('connect-src not found in the index.html CSP');
   return out;
@@ -33,7 +33,7 @@ export function cspForBuild(html: string, alertsOrigin: string, publicOrigin: st
   return out;
 }
 
-/** sw.js with the Worker origin filled in (used by pushsubscriptionchange); "" when alerts are off. */
+/** sw.js with the alerts server origin filled in (used by pushsubscriptionchange); "" when alerts are off. */
 export function swWithAlerts(sw: string, origin: string | undefined): string {
   const placeholder = /^const ALERTS_ORIGIN = .*; \/\/ @alerts$/m;
   if (!placeholder.test(sw)) throw new Error('sw.js @alerts placeholder not found');

@@ -69,7 +69,7 @@ function savePlaces(ctx: AppCtx, places: Place[]): void {
   // Without persistent storage (e.g. LINE's in-app browser) the place list lives only in the
   // hash, so every nav link must carry it forward or switching tabs would lose it.
   refreshNavHashes(ctx.shell);
-  // Alerts on: push the new set to the Worker (debounced; names only go to the SW cache).
+  // Alerts on: push the new set to the alerts server (debounced; names only go to the SW cache).
   if (alertsOn(ctx.kv)) void import('./alerts').then((m) => m.onPlacesSaved(alertsCtx(ctx))).catch(() => undefined);
 }
 

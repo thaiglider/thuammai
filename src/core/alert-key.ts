@@ -7,7 +7,7 @@ export function roundAlert(n: number): number {
   return Math.round(n * SCALE) / SCALE + 0;
 }
 
-/** The place key used by D1, the alerts job and the SW name cache, e.g. "13.812,100.512".
+/** The place key used by the database, the alerts job and the SW name cache, e.g. "13.812,100.512".
  *  Deliberately coarser than the web's placeKey (4 decimals). */
 export function alertKey(lat: number, lon: number): string {
   return `${roundAlert(lat).toFixed(ALERT.keyDecimals)},${roundAlert(lon).toFixed(ALERT.keyDecimals)}`;
