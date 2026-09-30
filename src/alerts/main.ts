@@ -15,6 +15,8 @@ export interface AlertEnv {
   VAPID_PUBLIC_KEY?: string; VAPID_PRIVATE_KEY?: string; VAPID_SUBJECT?: string;
   /** Telegram is on only when both are set; otherwise Telegram follows are deferred (not sent, not recorded). */
   TELEGRAM_BOT_TOKEN?: string; SITE_URL?: string;
+  /** Links in messages people read (default SITE_URL); SITE_URL alone stays the switch for Telegram/LINE. */
+  PUBLIC_URL?: string;
   /** LINE is on only with this token and SITE_URL (and a LineRepo). */
   LINE_CHANNEL_TOKEN?: string;
 }
@@ -46,11 +48,16 @@ const chunks = <T>(xs: T[], n: number): T[][] => {
 };
 const add = (counts: Counts, more: Counts) => { for (const [k, v] of Object.entries(more)) counts[k] = (counts[k] ?? 0) + v; };
 
+/** The base of every link in a message: PUBLIC_URL, else SITE_URL, with a trailing slash. */
+export function linkBase(e: Pick<AlertEnv, 'SITE_URL' | 'PUBLIC_URL'>): string {
+  const u = e.PUBLIC_URL || e.SITE_URL || '';
+  return u.endsWith('/') ? u : `${u}/`;
+}
 function tgFor(d: AlertDeps, clock: () => number): Tg | null {
   const e = d.env;
   if (!e.TELEGRAM_BOT_TOKEN || !e.SITE_URL) return null;
   // Links need the site URL with a trailing slash (ruling 12).
-  return { send: d.tgSend ?? tgSender(e.TELEGRAM_BOT_TOKEN, d.fetch), site: e.SITE_URL.endsWith('/') ? e.SITE_URL : `${e.SITE_URL}/`, clock: { now: clock, sleep: d.sleep } };
+  return { send: d.tgSend ?? tgSender(e.TELEGRAM_BOT_TOKEN, d.fetch), site: linkBase(e), clock: { now: clock, sleep: d.sleep } };
 }
 /** A store failure is not our bug (F1-4): skip, the loop retries this gen. */
 const failed = (err: unknown, counts: Counts = {}, event: LogEvent = 'skip'): RunResult => (err instanceof RepoError

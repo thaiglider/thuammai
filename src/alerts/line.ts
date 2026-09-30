@@ -7,7 +7,7 @@ import { lineApi, LOCATION_ACTION, lineRetryKey, textMsg, type LineAction, type 
 import { budgetVerdict, lineDay, lineLimit, lineMonth, lineUsed, quotaLow } from './line-budget';
 import type { LineNoticeKind, LineRepo } from './line-repo';
 import type { Counts } from './log';
-import type { AlertDeps } from './main';
+import { linkBase, type AlertDeps } from './main';
 import { toUpdate, type Planned } from './plan';
 import type { Snapshot } from './snapshot';
 import { tgSender } from './telegram';
@@ -21,7 +21,7 @@ export function lineFor(d: AlertDeps): LineRun | null {
   const token = d.env.LINE_CHANNEL_TOKEN;
   const site = d.env.SITE_URL;
   if (!d.lineRepo || !token || !site) return null;
-  return { repo: d.lineRepo, api: lineApi(token, d.fetch, 5_000), site: site.endsWith('/') ? site : `${site}/` };
+  return { repo: d.lineRepo, api: lineApi(token, d.fetch, 5_000), site: linkBase(d.env) };
 }
 
 /** Claim → evaluate from the snapshot in memory (the caller re-checked its freshness) → one free

@@ -4,6 +4,7 @@ import { browserEnvGlobals, detectEnv } from './lib/env';
 import { alertsOn } from './lib/alerts-state';
 import { DataStore, fetchLoader, SchemaMismatchError, type Meta } from './lib/data';
 import { effectiveNow, freshness } from './lib/freshness';
+import { arriveIfMoved, departIfOldHost, movedBanner } from './lib/move-client';
 import { applySettings, loadSettings } from './lib/settings';
 import { browserStorage } from './lib/storage';
 import { loadErrorBanner, loadPlaces, renderHome, renderPlacesWithoutData, warmCache, type AppCtx } from './views/home';
@@ -21,6 +22,10 @@ declare global { interface Window { __THUAMMAI_NOW__?: string } }
 
 async function boot(): Promise<void> {
   const kv = browserStorage();
+  // On the old github.io host: hand the visitor over to the new domain before drawing anything.
+  const depart = await departIfOldHost(kv);
+  if (depart === 'left') return;
+  const arrived = arriveIfMoved(kv);
   const env = detectEnv(browserEnvGlobals());
   const settings = loadSettings(kv, env.saveData);
   applySettings(document, settings);
@@ -33,6 +38,8 @@ async function boot(): Promise<void> {
       h('span', {}, 'เปิดใน Chrome/Safari เพื่อบันทึกจุดและเปิดออฟไลน์ได้'),
       h('button', { onclick: (e: Event) => (e.currentTarget as HTMLElement).parentElement?.remove() }, 'ปิด')));
   }
+  if (typeof depart === 'object') shell.banners.append(depart.fallback);
+  if (arrived) shell.banners.append(movedBanner(kv, env, base, arrived));
   let meta: Meta | null = null;
   let serverDate: string | null = null;
   let renderGen = 0;

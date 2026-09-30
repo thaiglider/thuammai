@@ -13,7 +13,7 @@ import {
 import { ALREADY_TH, coordsReadText, dbDownText, defaultLabel, fullSystemText, NOT_A_REPORT_TH, NOT_FOUND_TH, OUTSIDE_TH, pausedText, tgName, unfollowedText } from '../../../src/core/tg-text';
 import { deleteLineUser } from '../line/store';
 import { addCounts, capsAllow } from './caps';
-import type { Deps, Env } from './env';
+import { publicUrl, type Deps, type Env } from './env';
 import { err, HttpError, json, readBody, utcDay } from './http';
 import { notifyLineRequest } from './line-admin';
 import { counterRate, counterRateDaily } from './ratelimit';
@@ -85,10 +85,10 @@ async function handleEvent(e: unknown, env: Env, deps: Deps): Promise<void> {
       : await counterRateDaily(env, 'line', user, RATE.tgUpdatesPerChatPerMin, RATE.tgUpdatesPerChatPerDay, now);
     if (!allowed) return;
     if ((env.ALERTS_PAUSED || env.LINE_OFF) && !allowedWhileOff(text, pb)) {
-      await lineReply(c, env.LINE_OFF ? lineOffText(env.SITE_URL) : pausedText(env.SITE_URL));
+      await lineReply(c, env.LINE_OFF ? lineOffText(publicUrl(env)) : pausedText(publicUrl(env)));
       return;
     }
-    if (e.type === 'follow') { await lineReply(c, lineWelcomeText(env.SITE_URL), [LOCATION_ACTION]); return; }
+    if (e.type === 'follow') { await lineReply(c, lineWelcomeText(publicUrl(env)), [LOCATION_ACTION]); return; }
     if (pb !== null) { await onPostback(c, pb); return; }
     if (message !== null && message.type === 'location') {
       if (num(message.latitude) && num(message.longitude)) { await onLocation(c, message.latitude, message.longitude, false); return; }
@@ -98,7 +98,7 @@ async function handleEvent(e: unknown, env: Env, deps: Deps): Promise<void> {
     if (text !== null) { await onText(c, text); return; }
     await lineReply(c, LINE_OTHER_TH, [LOCATION_ACTION]);
   } catch {
-    await lineReply(c, dbDownText(env.SITE_URL));
+    await lineReply(c, dbDownText(publicUrl(env)));
   }
 }
 
@@ -106,7 +106,7 @@ async function onText(c: LineCtx, text: string): Promise<void> {
   if (text === LINE_CMD.request) return onRequest(c);
   if (text === LINE_CMD.list || LINE_ALIAS.list.test(text)) return onList(c);
   if (text === LINE_CMD.stop || LINE_ALIAS.stop.test(text)) return lineReply(c, LINE_STOP_CONFIRM_TH, [pbAction(LINE_STOP_ALL_BUTTON_TH, 'ld:all'), pbAction(LINE_CANCEL_BUTTON_TH, 'no')]);
-  if (text === LINE_CMD.help || LINE_ALIAS.help.test(text)) return lineReply(c, lineHelpText(c.env.SITE_URL), [LOCATION_ACTION]);
+  if (text === LINE_CMD.help || LINE_ALIAS.help.test(text)) return lineReply(c, lineHelpText(publicUrl(c.env)), [LOCATION_ACTION]);
   const rename = text.match(LINE_RENAME_RE);
   if (rename) return onRename(c, Number(rename[1]), rename[2]!);
   // Typed coordinates or a full map link (LINE on a computer may not send a location, F10).
@@ -124,7 +124,7 @@ async function onRequest(c: LineCtx): Promise<void> {
   const u = (await db.query<{ state: LineState; decided_at: Date | null }>('SELECT state, decided_at FROM line_user WHERE user_id = $1', [c.user])).rows[0];
   if (u?.state === 'approved') return lineReply(c, LINE_ALREADY_APPROVED_TH, [LOCATION_ACTION]);
   if (u?.state === 'pending') return lineReply(c, LINE_REQUEST_PENDING_TH, [LOCATION_ACTION]);
-  if (u?.state === 'rejected' && u.decided_at && c.now.getTime() - u.decided_at.getTime() < LINE.rejectCooldownDays * 86400e3) return lineReply(c, lineRejectedText(c.env.SITE_URL));
+  if (u?.state === 'rejected' && u.decided_at && c.now.getTime() - u.decided_at.getTime() < LINE.rejectCooldownDays * 86400e3) return lineReply(c, lineRejectedText(publicUrl(c.env)));
   const pending = (await db.query<{ n: number }>("SELECT COUNT(*)::integer AS n FROM line_user WHERE state = 'pending'")).rows[0]?.n ?? 0;
   if (pending >= LINE.requestsPending) return lineReply(c, LINE_REQUESTS_CLOSED_TH);
   if (!(await counterRate(c.env, 'lreq', c.user, 1, c.now, 'day'))) return lineReply(c, LINE_REQUEST_LIMIT_TH);
@@ -178,7 +178,7 @@ async function onFollow(c: LineCtx, key: string): Promise<void> {
   if (!p || !inThailand(p.lat, p.lon)) return;
   const db = c.env.db;
   const u = (await db.query<{ state: LineState; target_id: number | null }>('SELECT state, target_id FROM line_user WHERE user_id = $1', [c.user])).rows[0];
-  if (u?.state === 'rejected') return lineReply(c, lineRejectedText(c.env.SITE_URL));
+  if (u?.state === 'rejected') return lineReply(c, lineRejectedText(publicUrl(c.env)));
   if (!u || u.state !== 'approved' || u.target_id === null) return lineReply(c, LINE_NOT_APPROVED_FOLLOW_TH);
   const target = u.target_id;
   const mine = (await db.query<{ key: string; label: string | null }>('SELECT key, label FROM follow WHERE target_id = $1', [target])).rows;
@@ -186,7 +186,7 @@ async function onFollow(c: LineCtx, key: string): Promise<void> {
   if (mine.length >= LINE.placesPerUser) return lineReply(c, LINE_MAX_FOLLOWS_TH);
   const day = utcDay(c.now);
   const known = (await db.query('SELECT key FROM place WHERE key = $1', [key])).rows.length > 0;
-  if (!(await capsAllow(db, day, 0, known ? 0 : 1))) return lineReply(c, fullSystemText(c.env.SITE_URL));
+  if (!(await capsAllow(db, day, 0, known ? 0 : 1))) return lineReply(c, fullSystemText(publicUrl(c.env)));
   const label = defaultLabel(mine.map((r) => r.label ?? ''));
   const created = await db.tx(async (tx) => {
     await tx.query('INSERT INTO place (key, lat, lon, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (key) DO NOTHING', [key, p.lat, p.lon, c.now]);

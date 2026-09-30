@@ -53,13 +53,14 @@ function emergency(bkk: boolean): string {
   return `<h2>โทรฉุกเฉิน</h2><ul>${items}</ul>`;
 }
 
-function shell(title: string, ogDesc: string, body: string): string {
+function shell(title: string, ogDesc: string, body: string, canonical = ''): string {
   return `<!doctype html>
 <html lang="th"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="600">
 <title>${esc(title)}</title>
-<meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(ogDesc)}">
+${canonical ? `<link rel="canonical" href="${esc(canonical)}">
+` : ''}<meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(ogDesc)}">
 <style>${CSS}</style></head><body><main>${body}</main></body></html>`;
 }
 
@@ -69,7 +70,8 @@ export interface AreaPage {
   area: AreaLevel; obs: Observation[]; dams: Observation[]; upstream?: UpstreamRow[];
 }
 
-export function renderAreaPage(p: AreaPage, generatedAt: string): string {
+/** `publicOrigin` (e.g. https://flood.thaiglider.com, already validated) enables the canonical link; empty = none. */
+export function renderAreaPage(p: AreaPage, generatedAt: string, publicOrigin = ''): string {
   const L = p.area.level;
   const label = p.kind === 'district' ? `เขต${p.name} กรุงเทพมหานคร` : p.name;
   const title = `${label}: ${LEVEL_TH[L]} · ${fmtTime(generatedAt)}`;
@@ -105,12 +107,12 @@ ${freshnessNote(generatedAt)}`;
   body += `<p class="muted">${esc(DISCLAIMER_TH)}</p>
 <p class="muted">ข้อมูล: สสน. (ThaiWater), Longdo Traffic, Traffy Fondue, Open-Meteo, กรมอุตุนิยมวิทยา · ขอบเขตการปกครอง: OCHA COD-AB (CC BY-IGO)</p>`;
   const og = L === 0 ? NO_DATA_NOTE_TH : `${p.area.n2} จาก ${p.area.N} สถานีอยู่ในระดับเฝ้าระวังขึ้นไป · อัปเดต ${fmtTime(generatedAt)}`;
-  return shell(title, og, body);
+  return shell(title, og, body, publicOrigin ? `${publicOrigin}/p/${p.code}.html` : '');
 }
 
 export interface IndexRow { code: string; kind: 'province' | 'district'; name: string; level: Level; N: number; n2: number }
 
-export function renderIndex(rows: IndexRow[], generatedAt: string): string {
+export function renderIndex(rows: IndexRow[], generatedAt: string, publicOrigin = ''): string {
   const sorted = [...rows].sort((a, b) => b.level - a.level || b.n2 / Math.max(1, b.N) - a.n2 / Math.max(1, a.N) || a.name.localeCompare(b.name, 'th'));
   const row = (r: IndexRow) => `<div class="row"><a href="${esc(r.code)}.html">${esc(r.kind === 'district' ? `เขต${r.name}` : r.name)}</a>${badge(r.level)}</div>`;
   const worrying = sorted.filter((r) => r.level >= 2 && r.kind === 'province').slice(0, 5);
@@ -123,5 +125,5 @@ ${worrying.length ? `<h2>จังหวัดที่น่าห่วงต�
 <h2>เขตในกรุงเทพมหานคร</h2>${sorted.filter((r) => r.kind === 'district').map(row).join('')}
 ${emergency(true)}
 <p class="muted">${esc(DISCLAIMER_TH)}</p>`;
-  return shell('ท่วมไหม — ความเสี่ยงน้ำท่วมรายพื้นที่', `อัปเดต ${fmtTime(generatedAt)}`, body);
+  return shell('ท่วมไหม — ความเสี่ยงน้ำท่วมรายพื้นที่', `อัปเดต ${fmtTime(generatedAt)}`, body, publicOrigin ? `${publicOrigin}/p/index.html` : '');
 }

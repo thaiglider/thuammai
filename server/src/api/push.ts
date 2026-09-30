@@ -1,6 +1,6 @@
 import { BODY_MAX, CAPS, RATE } from '../../../src/core/alert-config';
 import { addCounts, boundedCount, capsAllow } from './caps';
-import type { Deps, Env } from './env';
+import { allowedOrigin, type Deps, type Env } from './env';
 import { empty, err, HttpError, json, readJson, safeEqual, toResponse, utcDay, withHeaders } from './http';
 import { checkIpRate, rateName, rateOnce, windowKey } from './ratelimit';
 import { parseSubscribe, parseUnsubscribe } from './validate';
@@ -9,10 +9,11 @@ import { parseSubscribe, parseUnsubscribe } from './validate';
 // pays for a comparison (no timing oracle for "does this exist").
 const DUMMY_AUTH = 'AAAAAAAAAAAAAAAAAAAAAA';
 
-/** OPTIONS/POST/DELETE /v1/push/subscription — CORS for SITE_ORIGIN only. */
+/** OPTIONS/POST/DELETE /v1/push/subscription — CORS for the SITE_ORIGIN list only. */
 export async function pushRoute(req: Request, env: Env, deps: Deps): Promise<Response> {
-  if (req.headers.get('origin') !== env.SITE_ORIGIN) return err(403, 'forbidden_origin');
-  const cors = { 'access-control-allow-origin': env.SITE_ORIGIN, vary: 'Origin' };
+  const origin = allowedOrigin(req, env);
+  if (origin === null) return err(403, 'forbidden_origin');
+  const cors = { 'access-control-allow-origin': origin, vary: 'Origin' };
   if (req.method === 'OPTIONS') {
     return empty(204, { ...cors, 'access-control-allow-methods': 'POST, DELETE, OPTIONS', 'access-control-allow-headers': 'Content-Type', 'access-control-max-age': '86400' });
   }

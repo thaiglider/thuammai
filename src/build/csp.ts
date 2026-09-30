@@ -21,9 +21,29 @@ export function cspWithAlerts(html: string, origin: string | undefined): string 
   return out;
 }
 
+/** index.html for the build: the alerts origin (spec §6.6) and the public origin (Plan I — on the
+ *  old host the page checks the new one is up before moving) appended to connect-src, each once;
+ *  byte-for-byte unchanged when both are empty. */
+export function cspForBuild(html: string, alertsOrigin: string, publicOrigin: string): string {
+  const pub = publicOriginForBuild(publicOrigin);
+  const withAlerts = cspWithAlerts(html, alertsOrigin || undefined);
+  if (!pub || pub === alertsOrigin) return withAlerts;
+  const out = withAlerts.replace(/(connect-src [^;"]*)/, `$1 ${pub}`);
+  if (out === withAlerts) throw new Error('connect-src not found in the index.html CSP');
+  return out;
+}
+
 /** sw.js with the Worker origin filled in (used by pushsubscriptionchange); "" when alerts are off. */
 export function swWithAlerts(sw: string, origin: string | undefined): string {
   const placeholder = /^const ALERTS_ORIGIN = .*; \/\/ @alerts$/m;
   if (!placeholder.test(sw)) throw new Error('sw.js @alerts placeholder not found');
   return sw.replace(placeholder, `const ALERTS_ORIGIN = ${JSON.stringify(origin ?? '')};`);
+}
+
+/** VITE_PUBLIC_ORIGIN (Plan I): empty = no move; otherwise an https:// origin with no path, or the
+ *  build fails — a wrong value would send every visitor of the old host to a broken address. */
+export function publicOriginForBuild(raw: string | undefined): string {
+  if (!raw) return '';
+  if (!ALERTS_ORIGIN_RE.test(raw)) throw new Error('VITE_PUBLIC_ORIGIN must be an https:// origin with no path, e.g. https://flood.thaiglider.com (or empty to switch the move off)');
+  return raw;
 }

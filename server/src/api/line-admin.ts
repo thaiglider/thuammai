@@ -9,7 +9,7 @@ import {
 import { pausedText } from '../../../src/core/tg-text';
 import { addLineSent, adminChat, lineCounts, readLineUsage } from '../line/store';
 import { addCounts } from './caps';
-import type { Deps, Env } from './env';
+import { publicUrl, type Deps, type Env } from './env';
 import { utcDay } from './http';
 import { tgApi } from './tg-api';
 import type { TgCtx } from './telegram';
@@ -59,7 +59,7 @@ export async function onAdminCallback(c: TgCtx, data: string, messageId: number)
   if ((await adminChat(c.env.db)) !== c.chat) {
     // Not the linked admin (spec §4.2): looks exactly like any other unknown callback, paused or not
     // — the caller already answered the callback query.
-    if (c.env.ALERTS_PAUSED) await c.api.send(c.chat, pausedText(c.env.SITE_URL));
+    if (c.env.ALERTS_PAUSED) await c.api.send(c.chat, pausedText(publicUrl(c.env)));
     return;
   }
   const a = data.match(ACB.approve);

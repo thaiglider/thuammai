@@ -11,7 +11,7 @@ import {
 } from '../../../src/core/tg-text';
 import { provinceArea, provinceFor } from './areas';
 import { addCounts, boundedCount, capsAllow } from './caps';
-import type { Deps, Env } from './env';
+import { publicUrl, type Deps, type Env } from './env';
 import { err, json, readJson, safeEqual, utcDay } from './http';
 import { onAdminCallback, onAdminCommand } from './line-admin';
 import { counterRate, counterRateDaily, rateName } from './ratelimit';
@@ -84,7 +84,7 @@ export async function handleUpdate(update: unknown, env: Env, deps: Deps): Promi
     }
     if (env.ALERTS_PAUSED && !allowedWhilePaused(msg, cb)) {
       if (cb) { await c.api.answer(cb.id); c.answered = true; }
-      await c.api.send(c.chat, pausedText(env.SITE_URL));
+      await c.api.send(c.chat, pausedText(publicUrl(env)));
       return;
     }
     if (msg) await onMessage(c, msg);
@@ -92,7 +92,7 @@ export async function handleUpdate(update: unknown, env: Env, deps: Deps): Promi
   } catch {
     // onCallback always answers first; never answer the same callback twice.
     if (cb && !c.answered) await c.api.answer(cb.id);
-    await c.api.send(c.chat, dbDownText(env.SITE_URL));
+    await c.api.send(c.chat, dbDownText(publicUrl(env)));
   }
 }
 
@@ -122,7 +122,7 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
   if (stored && (cmd !== null || !awaiting)) await db.query('UPDATE target SET tg_await = NULL WHERE chat_id = $1', [c.chat]);
   if (cmd !== null) {
     if (cmd === 'start') { await c.api.send(c.chat, START_TH, LOCATION_KEYBOARD); return; }
-    if (cmd === 'help') { await c.api.send(c.chat, helpText(c.env.SITE_URL)); return; }
+    if (cmd === 'help') { await c.api.send(c.chat, helpText(publicUrl(c.env))); return; }
     if (cmd === 'list') return onList(c);
     if (cmd === 'stop') {
       await c.api.send(c.chat, STOP_CONFIRM_TH, { inline_keyboard: [[{ text: STOP_ALL_BUTTON_TH, callback_data: 'x:all' }, { text: CANCEL_BUTTON_TH, callback_data: 'no' }]] });
@@ -131,7 +131,7 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
     if (cmd === 'admin' || cmd === 'line' || cmd === 'line_users') {
       if (await onAdminCommand(c, cmd, text)) return;
       // Not the linked admin (spec §4.2): looks exactly like any other unknown command, paused or not.
-      await c.api.send(c.chat, c.env.ALERTS_PAUSED ? pausedText(c.env.SITE_URL) : OTHER_TH);
+      await c.api.send(c.chat, c.env.ALERTS_PAUSED ? pausedText(publicUrl(c.env)) : OTHER_TH);
       return;
     }
     if (cmd === 'skip' && awaiting) return onSkip(c, awaiting);
@@ -206,7 +206,7 @@ export async function stage1For(env: Env, deps: Deps, now: Date, key: string, pe
   return stage1Text({
     area: area ? { name: provinceTitle(prov.code, prov.th), level: area.level, at: area.generatedAt, stale: !isFreshEnough(now, area.generatedAt) } : null,
     pending,
-    link: siteLink(env.SITE_URL, key),
+    link: siteLink(publicUrl(env), key),
   });
 }
 
@@ -244,7 +244,7 @@ async function onFollow(c: TgCtx, key: string): Promise<void> {
   // overshoot CAPS by at most the connection pool size — the same accepted, fails-closed race as
   // ratelimit.ts's minuteAndDay (never accepted past the cap for long: the daily cleanup job
   // recomputes the `_total` counters from the tables themselves, so any overshoot self-heals).
-  if (!(await capsAllow(db, day, newTargets, newPlaces))) { await c.api.send(c.chat, fullSystemText(c.env.SITE_URL)); return; }
+  if (!(await capsAllow(db, day, newTargets, newPlaces))) { await c.api.send(c.chat, fullSystemText(publicUrl(c.env))); return; }
   // Per-chat daily cap on NEW follows under its own "tgf" prefix; spent only once the insert succeeds.
   const tgfName = await rateName(c.env.RATE_HMAC_KEY!, 'tgf', String(c.chat));
   const tgf = (await db.query<{ n: number }>('SELECT COALESCE((SELECT n FROM counter WHERE name = $1 AND day = $2), 0) AS n', [tgfName, day])).rows[0];

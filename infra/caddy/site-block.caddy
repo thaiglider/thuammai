@@ -1,6 +1,5 @@
-# thuammai — flood alerts API (compose project in @THUAMMAI_HOME@; spec phase 3A §4.1)
+# thuammai — flood alerts API and web (compose project in @THUAMMAI_HOME@; spec phase 3A §4.1, domain move 2026-09-30)
 @API_HOST@ {
-	import security_headers
 	# @TLS@ — thuammai caddy add puts a tls { dns … } block here when CADDY_TLS_DNS is set in .env
 	# No access_log on purpose: the privacy text promises that IPs are not stored (R1).
 	request_body {
@@ -8,6 +7,7 @@
 	}
 	@api path /v1/*
 	handle @api {
+		import security_headers
 		# keepalive 60s (< the api server's own 65 s keep-alive timeout, F1 I2 / F2-C): the upstream
 		# must never close an idle connection before Caddy stops reusing it.
 		reverse_proxy thuammai-api:8080 {
@@ -16,10 +16,30 @@
 			}
 		}
 	}
-	handle / {
-		redir https://thaiglider.github.io/thuammai/ 302
-	}
+	# The web (domain move stage ก, spec 2026-09-30): served from GitHub Pages under our host.
 	handle {
-		respond 404
+		# The stack's security_headers snippet ends with "-Server", which defers its header block
+		# so a site-level import would overwrite our Permissions-Policy: the web sets the same values
+		# itself, allowing the GPS position (the site asks for it).
+		header {
+			Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "SAMEORIGIN"
+			Referrer-Policy "strict-origin-when-cross-origin"
+			Permissions-Policy "accelerometer=(), camera=(), geolocation=(self), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+			-Server
+		}
+		rewrite * /thuammai{uri}
+		reverse_proxy https://thaiglider.github.io {
+			header_up Host thaiglider.github.io
+			# GitHub gets no client IP nor Cloudflare's country for it (R1: IPs are not stored or shared).
+			# One field per line: header_up with more words is a set/replace, not a list of deletes.
+			header_up -X-Forwarded-For
+			header_up -Cf-Connecting-Ip
+			header_up -True-Client-Ip
+			header_up -X-Real-Ip
+			header_up -Cf-Ipcountry
+			header_down Location ^https://thaiglider\.github\.io/thuammai/ https://@API_HOST@/
+		}
 	}
 }

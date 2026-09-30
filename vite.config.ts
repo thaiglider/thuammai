@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } fro
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
-import { alertsOriginForBuild, cspWithAlerts, swWithAlerts } from './src/build/csp.ts';
+import { alertsOriginForBuild, cspForBuild, publicOriginForBuild, swWithAlerts } from './src/build/csp.ts';
 import { precacheAssets, type ViteManifest } from './src/build/precache.ts';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -51,15 +51,16 @@ function writeServiceWorker(dist: string, alertsOrigin: string): void {
   writeFileSync(swPath, swWithAlerts(out, alertsOrigin));
 }
 
-/** Adds the alerts Worker to the page CSP when VITE_ALERTS_ORIGIN is set (spec §6.6). */
-function alertsCsp(origin: string): Plugin {
-  return { name: 'thuammai-alerts-csp', transformIndexHtml: (html) => cspWithAlerts(html, origin || undefined) };
+/** Adds the alerts Worker (spec §6.6) and the public origin (Plan I move check) to the page CSP. */
+function connectCsp(alertsOrigin: string, publicOrigin: string): Plugin {
+  return { name: 'thuammai-connect-csp', transformIndexHtml: (html) => cspForBuild(html, alertsOrigin, publicOrigin) };
 }
 
 export default defineConfig(({ mode }) => {
   // The e2e settings (test origin, dummy key) live with the tests, outside the published src/ (m9).
   const envDir = resolve(ROOT, mode === 'e2e' ? 'tests/e2e' : 'src/web');
   const raw = loadEnv(mode, envDir, 'VITE_').VITE_ALERTS_ORIGIN;
+  const publicOrigin = publicOriginForBuild(loadEnv(mode, envDir, 'VITE_').VITE_PUBLIC_ORIGIN); // throws (build fails) when malformed
   const { origin: alertsOrigin, warning } = alertsOriginForBuild(raw);
   if (warning) console.warn(`
 [thuammai] WARNING: ${warning}
@@ -73,6 +74,6 @@ export default defineConfig(({ mode }) => {
     publicDir: 'public',
     build: { outDir: '../../dist', emptyOutDir: true, target: 'es2022', sourcemap: false, manifest: true },
     preview: { port: 4173, strictPort: true },
-    plugins: [copyStatic(alertsOrigin), alertsCsp(alertsOrigin)],
+    plugins: [copyStatic(alertsOrigin), connectCsp(alertsOrigin, publicOrigin)],
   };
 });

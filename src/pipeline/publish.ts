@@ -18,6 +18,8 @@ export interface PublishInput {
   week: WeekStore;
   /** Serialized, validated skill.json (see loadSkill); omitted from the output when null/undefined. */
   skill?: string | null;
+  /** Validated public origin for canonical links on p/*.html; empty/omitted = none. */
+  publicOrigin?: string;
 }
 
 const CHAIN_PROVS = new Set(['60', '18', '17', '15', '14', '12', '10']);
@@ -25,6 +27,7 @@ const CHAIN_PROVS = new Set(['60', '18', '17', '15', '14', '12', '10']);
 export function buildOutputs(inp: PublishInput): Map<string, string> {
   const { now, obs, collected: c, sd } = inp;
   const gen = toIso07(now);
+  const origin = inp.publicOrigin ?? '';
   const head = { generatedAt: gen, schema: SCHEMA, thresholdsVersion: THRESHOLDS_VERSION };
   const files = new Map<string, string>();
   const put = (path: string, data: unknown) => files.set(path, JSON.stringify(data));
@@ -70,7 +73,7 @@ export function buildOutputs(inp: PublishInput): Map<string, string> {
       code: p.code, kind: 'province', name: p.th, lat: p.lat, lon: p.lon, area,
       obs: inArea.filter((o) => o.kind !== 'dam'), dams: inArea.filter((o) => o.kind === 'dam'),
       upstream: CHAIN_PROVS.has(p.code) ? upstream : undefined,
-    }, gen));
+    }, gen, origin));
   }
   const bkkObs = byProv.get('10')!.obs;
   for (const d of sd.districts) {
@@ -80,10 +83,10 @@ export function buildOutputs(inp: PublishInput): Map<string, string> {
     files.set(`p/${d.code}.html`, renderAreaPage({
       code: d.code, kind: 'district', name: d.th, parentName: provName.get('10'), lat: d.lat, lon: d.lon, area,
       obs: inArea, dams: [],
-    }, gen));
+    }, gen, origin));
   }
   put('data/areas.json', { ...head, areas: areaRows });
-  files.set('p/index.html', renderIndex(areaRows, gen));
+  files.set('p/index.html', renderIndex(areaRows, gen, origin));
 
   for (const [path, body] of weekOutputs(inp.week, obs, head)) files.set(path, body);
 

@@ -50,6 +50,7 @@ jobs:
       # Public values only (never secrets): the alerts origin (the VPS, phase 3A) and the bot link are baked in only while alerts are on.
       - run: npm run build
         env:
+          VITE_PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
           VITE_ALERTS_ORIGIN: ${{ vars.ALERTS_ENABLED == '1' && vars.ALERTS_ORIGIN || '' }}
           VITE_VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
           VITE_TELEGRAM_BOT: ${{ vars.ALERTS_ENABLED == '1' && vars.TELEGRAM_BOT_USERNAME || '' }}
@@ -72,7 +73,9 @@ jobs:
           else
             echo "no archive release yet"
           fi
-      - run: npm run pipeline -- --out dist --state .cache/state.json --site "$SITE_URL" --skill .cache/skill/skill.json
+      - env:
+          PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+        run: npm run pipeline -- --out dist --state .cache/state.json --site "$SITE_URL" --skill .cache/skill/skill.json
       - uses: actions/cache/save@v4
         if: always()
         with:

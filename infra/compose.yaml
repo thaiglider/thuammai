@@ -66,6 +66,7 @@ services:
       LINE_OFF: ${LINE_OFF:-0}
       SITE_ORIGIN: ${SITE_ORIGIN:-}
       SITE_URL: ${SITE_URL:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
       ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
       CLIENT_IP_MODE: ${CLIENT_IP_MODE:-direct}
       TRUSTED_PROXY_HOST: ${TRUSTED_PROXY_HOST:-caddy}
@@ -112,6 +113,7 @@ services:
       LINE_CHANNEL_TOKEN_FILE: /run/secrets/line_channel_token
       LINE_OFF: ${LINE_OFF:-0}
       SITE_URL: ${SITE_URL:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
       ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
     secrets: [pg_app, vapid_private_key, telegram_bot_token, kuma_push_alerts, line_channel_token]
     tmpfs: ["/tmp:size=128m,mode=1777"]

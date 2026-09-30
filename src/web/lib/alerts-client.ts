@@ -1,6 +1,7 @@
 import { alertKey } from '../../core/alert-key';
 import { clearAlertPlaces, writeAlertPlaces } from './alert-places';
 import { alertsCfg, clearAlerts, loadAlerts, placesHash, pushConfigured, saveAlerts, type AlertsCfg } from './alerts-state';
+import { MOVED_OLD_SUB_KEY, readOldSub } from './move';
 import type { Place } from './places';
 import type { KV } from './storage';
 
@@ -82,6 +83,23 @@ async function forget(d: PushDeps, sub: SubLike | null): Promise<void> {
   await clearAlertPlaces(d.caches);
 }
 
+/** Plan I: a visitor moved here from github.io carries the old subscription; only now that the new
+ *  one is on does the old one go (best effort — the server also cleans a dead one itself). */
+let dropping: Promise<void> | null = null;
+/** Single-flight: a sync from page open and one from the banner's button can overlap; they share
+ *  one DELETE instead of racing two. */
+function dropMovedOldSub(d: PushDeps): Promise<void> {
+  dropping ??= dropOnce(d).finally(() => { dropping = null; });
+  return dropping;
+}
+async function dropOnce(d: PushDeps): Promise<void> {
+  const old = readOldSub(d.kv);
+  if (!old) { d.kv.remove(MOVED_OLD_SUB_KEY); return; }
+  const r = await call(d, 'DELETE', { endpoint: old.endpoint, auth: old.auth });
+  // Forgotten only once the server confirms (or never knew it); otherwise the next sync retries.
+  if ((r.status >= 200 && r.status < 300) || r.status === 404 || r.status === 410) d.kv.remove(MOVED_OLD_SUB_KEY);
+}
+
 /** Spec §6.1 steps 2–5. Must be called straight from the tap handler: the permission request is
  *  its first, synchronous step (iOS requires a user gesture). */
 export async function enableAlerts(d: PushDeps, places: readonly Place[]): Promise<EnableResult> {
@@ -102,6 +120,7 @@ export async function enableAlerts(d: PushDeps, places: readonly Place[]): Promi
     if (r.status === 200) {
       saveAlerts(d.kv, { on: true, endpoint: sub.endpoint, syncedAt: d.now().toISOString(), placesHash: placesHash(places), origin: d.cfg.origin });
       await writeAlertPlaces(d.caches, d.base, places);
+      await dropMovedOldSub(d);
       return 'ok';
     }
     await sub.unsubscribe().catch(() => false); // never leave a half-made subscription
@@ -133,11 +152,12 @@ export async function syncNow(d: PushDeps, places: readonly Place[]): Promise<Sy
   await writeAlertPlaces(d.caches, d.base, places);
   const hash = placesHash(places);
   const fresh = d.now().getTime() - Date.parse(st.syncedAt) < WEEK_MS;
-  if (!st.pending && hash === st.placesHash && sub.endpoint === st.endpoint && fresh && st.origin === d.cfg.origin) return 'unchanged';
+  if (!st.pending && hash === st.placesHash && sub.endpoint === st.endpoint && fresh && st.origin === d.cfg.origin) { await dropMovedOldSub(d); return 'unchanged'; }
   if (st.holdUntil && d.now().getTime() < Date.parse(st.holdUntil)) return 'limited';
   const r = await post(d, sub, places);
   if (r.status === 200) {
     saveAlerts(d.kv, { on: true, endpoint: sub.endpoint, syncedAt: d.now().toISOString(), placesHash: hash, origin: d.cfg.origin });
+    await dropMovedOldSub(d);
     return 'ok';
   }
   if (tooManyPlaces(r)) {

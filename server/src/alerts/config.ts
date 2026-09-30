@@ -1,6 +1,6 @@
 import type { Counts } from '../../../src/alerts/log';
 import type { AlertEnv } from '../../../src/alerts/main';
-import { dbConn, withSlash, type ConfigResult } from '../api/config';
+import { dbConn, parsePublicUrl, withSlash, type ConfigResult } from '../api/config';
 import type { PgConn } from '../db/pg';
 import type { SecretReader } from '../secrets';
 
@@ -19,11 +19,13 @@ export function loadAlertsConfig(e: NodeJS.ProcessEnv, read: SecretReader): Conf
   const clockOffsetMs = Number(e.THUAMMAI_CLOCK_OFFSET_MS ?? '0');
   if (!Number.isInteger(clockOffsetMs)) return { ok: false, code: 'config_invalid_clock' };
   const siteUrl = withSlash(e.SITE_URL);
+  const publicUrl = parsePublicUrl(e.PUBLIC_URL, '');
+  if (publicUrl === null) return { ok: false, code: 'config_invalid' };
   return {
     ok: true,
     cfg: {
       siteUrl,
-      env: { VAPID_PUBLIC_KEY: e.VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: priv, VAPID_SUBJECT: e.VAPID_SUBJECT, TELEGRAM_BOT_TOKEN: read('TELEGRAM_BOT_TOKEN'), LINE_CHANNEL_TOKEN: e.LINE_OFF === '1' ? undefined : read('LINE_CHANNEL_TOKEN'), SITE_URL: siteUrl },
+      env: { VAPID_PUBLIC_KEY: e.VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: priv, VAPID_SUBJECT: e.VAPID_SUBJECT, TELEGRAM_BOT_TOKEN: read('TELEGRAM_BOT_TOKEN'), LINE_CHANNEL_TOKEN: e.LINE_OFF === '1' ? undefined : read('LINE_CHANNEL_TOKEN'), SITE_URL: siteUrl, PUBLIC_URL: publicUrl || undefined },
       paused: e.ALERTS_PAUSED === '1', kumaUrl: read('KUMA_PUSH_ALERTS') ?? null, db, tmpDir: e.TMPDIR || '/tmp', clockOffsetMs,
     },
   };

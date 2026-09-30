@@ -129,7 +129,15 @@ for m in Backup Deploy Host; do kuma_has "ciTok$m" finish up || fail "no Kuma pu
 step "smoke through caddy"
 wait_for 120 status_is on || fail "status is not on: $(api https://flood.test/v1/status || true)"
 [ "$(code https://flood.test/v1/health)" = 200 ] || fail "health"
-[ "$(code https://flood.test/)" = 302 ] || fail "/ is not a redirect"
+# `/` is now the web, proxied from GitHub Pages (domain move stage ก). `thuammai finish` above already needs
+# `/` to answer 200 or 302 (the production rule), so here the proxy must answer 200: a redirect, the old 404
+# or an upstream error fails CI (GitHub runners reach github.io).
+[ "$(code https://flood.test/)" = 200 ] || fail "/ did not answer 200 from the Pages upstream"
+webh="$(api -o /dev/null -D - https://flood.test/ | tr -d '\r')"
+grep -qi '^permissions-policy:.*geolocation=(self)' <<<"$webh" || fail "the web handle lacks Permissions-Policy geolocation=(self)"
+apih="$(api -o /dev/null -D - https://flood.test/v1/health | tr -d '\r')"
+grep -qi 'geolocation=(self)' <<<"$apih" && fail "/v1 must not allow geolocation"
+grep -qi '^x-frame-options: SAMEORIGIN$' <<<"$apih" || fail "/v1 lost the security_headers snippet"
 [ "$(code https://flood.test/internal/v1/places)" = 404 ] || fail "internal path answered"
 [ "$(code -X POST -H 'content-type: application/json' -H 'x-telegram-bot-api-secret-token: wrong' -d '{}' https://flood.test/v1/telegram)" = 401 ] || fail "telegram secret"
 pre="$(api -o /dev/null -D - -X OPTIONS -H "Origin: $ORIGIN" -H 'Access-Control-Request-Method: POST' https://flood.test/v1/push/subscription | tr -d '\r')"

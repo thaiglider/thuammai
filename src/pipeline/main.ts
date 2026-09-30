@@ -4,6 +4,7 @@ import { dirname, join, parse, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { appendEvents, appendSamples, compact } from '../core/history';
+import { ALERTS_ORIGIN_RE } from '../core/alert-config';
 import { computeStatus } from '../core/station';
 import { FRESH_MIN, HELD_MAX_H, HISTORY } from '../core/thresholds';
 import { ageMin, toIso07 } from '../core/time';
@@ -23,6 +24,15 @@ export interface RunOpts {
   fetcher?: Fetcher;
   /** Path of skill.json downloaded from the newest archive Release (optional). */
   skill?: string;
+  /** Public origin for canonical links (PUBLIC_ORIGIN); empty/omitted = none. */
+  publicOrigin?: string;
+}
+
+/** Empty = no canonical links; otherwise an https origin with no path, or throw. */
+export function parsePublicOrigin(raw: string | undefined): string {
+  const v = (raw ?? '').trim();
+  if (v && !ALERTS_ORIGIN_RE.test(v)) throw new Error(`PUBLIC_ORIGIN must be an https:// origin with no path, e.g. https://flood.thaiglider.com (or empty for no canonical links); got: ${v}`);
+  return v;
 }
 
 /** Refuse to write into a directory that is the filesystem root, the user's home, the
@@ -44,6 +54,7 @@ export async function runPipeline(opts: RunOpts): Promise<RunResult> {
   const now = opts.now ? new Date(opts.now) : new Date();
   if (opts.now && Number.isNaN(now.getTime())) throw new Error(`Invalid --now: ${opts.now}`);
   assertSafeOutDir(opts.out);
+  const publicOrigin = parsePublicOrigin(opts.publicOrigin);
 
   const sd = loadStaticData();
   const st = opts.freshState ? emptyState() : await loadState(opts.state, opts.site);
@@ -83,7 +94,7 @@ export async function runPipeline(opts: RunOpts): Promise<RunResult> {
 
   st.savedAt = now.toISOString();
   const skill = await loadSkill(opts.skill, opts.site);
-  const files = buildOutputs({ now, obs, collected: c, sd, history: st.history, historyH, state: st, week: st.week, skill });
+  const files = buildOutputs({ now, obs, collected: c, sd, history: st.history, historyH, state: st, week: st.week, skill, publicOrigin });
   for (const sub of ['data', 'p']) rmSync(join(opts.out, sub), { recursive: true, force: true });
   for (const [rel, content] of files) {
     const full = join(opts.out, rel);
@@ -136,9 +147,10 @@ async function cli() {
       skill: { type: 'string' },
     },
   });
+  const publicOrigin = parsePublicOrigin(process.env.PUBLIC_ORIGIN);
   const r = await runPipeline({
     out: values.out!, fixtures: values.fixtures, now: values.now, state: values.state!,
-    site: values.site, freshState: values['fresh-state'], skill: values.skill,
+    site: values.site, freshState: values['fresh-state'], skill: values.skill, publicOrigin,
   });
   for (const h of r.health) {
     console.log(`${h.ok ? 'OK ' : 'ERR'} ${h.id.padEnd(8)} n=${String(h.count).padStart(5)} lag=${h.lagMin ?? '-'}m${h.error ? ` ${h.error}` : ''}${h.carriedFrom ? ` (carried from ${h.carriedFrom})` : ''}`);

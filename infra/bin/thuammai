@@ -49,6 +49,7 @@ thuammai status | logs | version
 thuammai pause | resume                      (server-side emergency switch, R28 / หยุดแจ้งเตือนชั่วคราว)
 thuammai finish                              (after the Caddy block and DNS / หลังเพิ่ม Caddy และ DNS)
 thuammai caddy add                           (append our site block to the shared Caddyfile — asks first)
+thuammai caddy update [--yes]                (replace our site block with the release's — asks first; --yes or THUAMMAI_ASSUME_YES=1 = no question)
 thuammai kuma                                (Uptime Kuma push URLs)
 thuammai telegram set|delete                 (webhook)
 thuammai telegram token [--file <path>]      (bot token from stdin, a hidden prompt or a file — never an argument)
@@ -182,6 +183,7 @@ cmd_install() {
   fi
   env_default SITE_ORIGIN https://thaiglider.github.io
   env_default SITE_URL https://thaiglider.github.io/thuammai/
+  env_default PUBLIC_URL https://flood.thaiglider.com/
   env_default ALERTS_PAUSED 0
   env_default LINE_OFF 0
   env_default PROXY_NETWORK ai-stack_ai-stack
@@ -296,46 +298,55 @@ cmd_install() {
   say "  GitHub variables: ALERTS_ORIGIN=https://$(env_get API_HOST)  VAPID_PUBLIC_KEY=$(env_get VAPID_PUBLIC_KEY)  TELEGRAM_BOT_USERNAME=$(env_get TELEGRAM_BOT_USERNAME)"
 }
 
-# caddy add (F2-6, C3): print the block and the diff, append only after "y", keep a backup, validate
-# inside the shared caddy container, reload only when valid; any failure copies the backup back in
-# place (the file is bind-mounted into caddy — its inode must stay the same).
-cmd_caddy_add() {
-  local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host tlsdns block dest bak ans new mounts
-  host="$(env_get API_HOST)"
-  [ -n "$host" ] || die "API_HOST is not set — run thuammai install first"
-  valid_host "$host" || die "API_HOST in $TH/.env is not a plain host name (no *, port, comma, space, # or &) — nothing changed"
-  [ -e "$file" ] || die "no Caddyfile at $file — set CADDYFILE=<path> if the stack keeps it elsewhere; nothing changed"
-  [ -f "$file" ] || die "$file is not a regular file — nothing changed"
-  [ -w "$file" ] || die "cannot write $file as $(id -un) — ask whoever runs the stack to append the block (owner guide step 5); nothing changed"
-  if grep -qxF "$host {" "$file"; then say "a site block for $host is already in $file / มีบล็อกของ $host อยู่แล้ว"; return 0; fi
-  if grep -q '^# thuammai — flood alerts API' "$file"; then
-    say "WARNING: $file already has a thuammai block for another host — remove it yourself if it is stale / มีบล็อกของ thuammai สำหรับโดเมนอื่นอยู่แล้ว"
-  fi
-  mounts="$(docker inspect caddy -f '{{range .Mounts}}{{.Source}} {{.Destination}}{{"\n"}}{{end}}' 2>/dev/null)" || die "no container named 'caddy' — nothing changed"
-  dest="$(printf '%s\n' "$mounts" | awk -v f="$file" -v d="$(dirname "$file")" -v b="$(basename "$file")" '$1 == f { print $2; exit } $1 == d { print $2 "/" b; exit }')"
-  [ -n "$dest" ] || die "the caddy container does not mount $file — it would never see the block; nothing changed"
-  block="$(sed "s#@API_HOST@#$host#g; s#@THUAMMAI_HOME@#$TH#g" "$(release_dir "$(current_tag)")/caddy/site-block.caddy")"
+# caddy_block_build <caddyfile> <host>: our site block from the release template (host, TLS dns,
+# security_headers) into CADDY_BLOCK. Called without a subshell so that die stops the command; a
+# missing template or an empty/odd result must never reach the shared Caddyfile.
+caddy_block_build() {
+  local file="$1" host="$2" tlsdns block tpl
+  tpl="$(release_dir "$(current_tag)")/caddy/site-block.caddy"
+  [ -r "$tpl" ] || die "cannot read the site block template $tpl — nothing changed"
+  block="$(sed "s#@API_HOST@#$host#g; s#@THUAMMAI_HOME@#$TH#g" "$tpl")" || die "could not build the site block from $tpl — nothing changed"
   # A shared Caddy that proves domains by DNS-01 per zone (its firewall lets only Cloudflare in, so
   # HTTP-01/TLS-ALPN cannot work) needs the same `tls { dns … }` as its other sites in this zone.
   tlsdns="$(env_get CADDY_TLS_DNS)"
   if [ -n "$tlsdns" ]; then
     [[ "$tlsdns" =~ ^[a-z0-9_]+\ \{env\.[A-Z0-9_]+\}$ ]] || die "CADDY_TLS_DNS must look like: cloudflare {env.CF_DNS_TOKEN_COM} — nothing changed"
-    block="$(printf '%s\n' "$block" | awk -v d="$tlsdns" '/^\t# @TLS@/ { print "\ttls {"; print "\t\tdns " d; print "\t}"; next } { print }')"
+    block="$(printf '%s\n' "$block" | awk -v d="$tlsdns" '/^\t# @TLS@/ { print "\ttls {"; print "\t\tdns " d; print "\t}"; next } { print }')" || die "could not add the tls line — nothing changed"
   else
-    block="$(printf '%s\n' "$block" | grep -v '@TLS@')"
+    block="$(printf '%s\n' "$block" | grep -v '@TLS@')" || die "could not build the site block — nothing changed"
   fi
-  grep -q '^(security_headers)' "$file" || block="$(printf '%s\n' "$block" | grep -v 'import security_headers')"
-  say "---- block for $file / บล็อกที่จะเพิ่ม ----"
-  say "$block"
-  say "---- diff -u ----"
-  new="$(mktemp "$TH/run/Caddyfile.new.XXXXXX")"
-  CLEANUP+=("$new")
-  { cat "$file"; printf '\n%s\n' "$block"; } >"$new"
-  diff -u --label "$file" --label "$file (new)" "$file" "$new" || true
-  rm -f "$new"
-  say "-------------------------"
-  ans="$(ask "Append it, validate and then reload the shared caddy? / เพิ่มบล็อกนี้แล้วตรวจและรีโหลด caddy? [y/N]: ")" || ans=""
-  yes_no "$ans" || { say "nothing changed / ไม่ได้แก้ไขอะไร"; return 0; }
+  if ! grep -q '^(security_headers)' "$file"; then
+    block="$(printf '%s\n' "$block" | grep -v 'import security_headers')" || die "could not build the site block — nothing changed"
+  fi
+  printf '%s\n' "$block" | grep -qxF "$host {" || die "the built site block has no '$host {' line — nothing changed"
+  printf '%s\n' "$block" | grep -qF '@api path /v1/*' || die "the built site block has no '@api path /v1/*' — nothing changed"
+  CADDY_BLOCK="$block"
+}
+
+# caddy_prepare <caddyfile>: checks common to add/update; sets CADDY_HOST and CADDY_DEST (the path
+# the caddy container sees).
+caddy_prepare() {
+  local file="$1"
+  CADDY_HOST="$(env_get API_HOST)"
+  [ -n "$CADDY_HOST" ] || die "API_HOST is not set — run thuammai install first"
+  valid_host "$CADDY_HOST" || die "API_HOST in $TH/.env is not a plain host name (no *, port, comma, space, # or &) — nothing changed"
+  [ -e "$file" ] || die "no Caddyfile at $file — set CADDYFILE=<path> if the stack keeps it elsewhere; nothing changed"
+  [ -f "$file" ] || die "$file is not a regular file — nothing changed"
+  [ -w "$file" ] || die "cannot write $file as $(id -un) — ask whoever runs the stack to change the block (owner guide step 5); nothing changed"
+}
+caddy_dest() {
+  local file="$1" mounts
+  mounts="$(docker inspect caddy -f '{{range .Mounts}}{{.Source}} {{.Destination}}{{"\n"}}{{end}}' 2>/dev/null)" || die "no container named 'caddy' — nothing changed"
+  CADDY_DEST="$(printf '%s\n' "$mounts" | awk -v f="$file" -v d="$(dirname "$file")" -v b="$(basename "$file")" '$1 == f { print $2; exit } $1 == d { print $2 "/" b; exit }')"
+  [ -n "$CADDY_DEST" ] || die "the caddy container does not mount $file — it would never see the block; nothing changed"
+}
+
+# caddy_apply <caddyfile> <new-content-file> <verb> <snapshot>: refuse if the file changed since the
+# snapshot the new content was built from; backup, write in place (same inode), validate, reload;
+# any failure copies the backup back.
+caddy_apply() {
+  local file="$1" new="$2" verb="$3" snap="$4" bak
+  cmp -s "$file" "$snap" || die "the Caddyfile changed while waiting — run the command again; nothing changed / Caddyfile ถูกแก้ระหว่างรอ — รันใหม่ ไม่ได้แก้อะไร"
   # The backup stays in our own directory (0700/0600), never next to the shared stack's files.
   mkdir -p "$TH/run/caddy"
   chmod 700 "$TH/run/caddy"
@@ -343,30 +354,120 @@ cmd_caddy_add() {
   (umask 077 && cp "$file" "$bak")
   chmod 600 "$bak"
   cmp -s "$file" "$bak" || die "could not back up $file — nothing changed"
-  printf '\n%s\n' "$block" >>"$file"
-  if ! docker exec caddy caddy validate --config "$dest" --adapter caddyfile >/dev/null 2>&1; then
+  cat "$new" >"$file"
+  if ! docker exec caddy caddy validate --config "$CADDY_DEST" --adapter caddyfile >/dev/null 2>&1; then
     cp "$bak" "$file"
     die "caddy validate rejected the new Caddyfile — restored it from $bak, caddy was NOT reloaded / ไฟล์ใหม่ไม่ผ่านการตรวจ — คืนไฟล์เดิมแล้ว ไม่ได้รีโหลด"
   fi
-  if ! docker exec caddy caddy reload --config "$dest" --adapter caddyfile >/dev/null; then
+  if ! docker exec caddy caddy reload --config "$CADDY_DEST" --adapter caddyfile >/dev/null; then
     cp "$bak" "$file"
     die "caddy reload failed — restored $file from $bak; caddy keeps its previous config / รีโหลดไม่สำเร็จ — คืนไฟล์เดิมแล้ว"
   fi
-  say "added and reloaded (backup: $bak) / เพิ่มและรีโหลดแล้ว"
+  say "$verb and reloaded (backup: $bak) / $verb และรีโหลดแล้ว"
+}
+
+# caddy add (F2-6, C3): print the block and the diff, append only after "y", keep a backup, validate
+# inside the shared caddy container, reload only when valid; any failure copies the backup back in
+# place (the file is bind-mounted into caddy — its inode must stay the same).
+cmd_caddy_add() {
+  local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host block new snap ans
+  caddy_prepare "$file"
+  host="$CADDY_HOST"
+  if grep -qxF "$host {" "$file"; then say "a site block for $host is already in $file — 'thuammai caddy update' replaces it / มีบล็อกของ $host อยู่แล้ว (ใช้ caddy update เพื่อแทนที่)"; return 0; fi
+  if grep -q '^# thuammai — flood alerts API' "$file"; then
+    say "WARNING: $file already has a thuammai block for another host — remove it yourself if it is stale / มีบล็อกของ thuammai สำหรับโดเมนอื่นอยู่แล้ว"
+  fi
+  caddy_dest "$file"
+  caddy_block_build "$file" "$host"
+  block="$CADDY_BLOCK"
+  say "---- block for $file / บล็อกที่จะเพิ่ม ----"
+  say "$block"
+  say "---- diff -u ----"
+  new="$(mktemp "$TH/run/Caddyfile.new.XXXXXX")"
+  snap="$(mktemp "$TH/run/Caddyfile.snap.XXXXXX")"
+  CLEANUP+=("$new" "$snap")
+  cp "$file" "$snap"
+  { cat "$snap"; printf '\n%s\n' "$block"; } >"$new"
+  diff -u --label "$file" --label "$file (new)" "$file" "$new" || true
+  say "-------------------------"
+  ans="$(ask "Append it, validate and then reload the shared caddy? / เพิ่มบล็อกนี้แล้วตรวจและรีโหลด caddy? [y/N]: ")" || ans=""
+  yes_no "$ans" || { rm -f "$new" "$snap"; say "nothing changed / ไม่ได้แก้ไขอะไร"; return 0; }
+  caddy_apply "$file" "$new" added "$snap"
+  rm -f "$new" "$snap"
+}
+
+# caddy update [--yes]: replace our existing block with the release's (the block now serves the web
+# too). The block starts at the "# thuammai — flood alerts API" comment right before "$host {" (any
+# text after it) and ends at the first "}" in column 0; the rest of the file is copied unchanged.
+# THUAMMAI_ASSUME_YES=1 is the same as --yes (for ssh without a terminal).
+cmd_caddy_update() {
+  local file="${CADDYFILE:-/opt/stack/proxy/Caddyfile}" host block new snap blockf ans yes=0 n
+  while [ $# -gt 0 ]; do
+    case "$1" in --yes) yes=1 ;; *) die "thuammai caddy update [--yes]" ;; esac
+    shift
+  done
+  [ "${THUAMMAI_ASSUME_YES:-}" = 1 ] && yes=1
+  caddy_prepare "$file"
+  host="$CADDY_HOST"
+  n="$(grep -cxF "$host {" "$file" || true)"
+  [ "$n" = 1 ] || die "expected exactly one '$host {' block in $file, found $n — nothing changed (a missing block: thuammai caddy add) / ไม่พบบล็อกของ $host เพียงหนึ่งอัน — ไม่ได้แก้ไขอะไร"
+  caddy_dest "$file"
+  caddy_block_build "$file" "$host"
+  block="$CADDY_BLOCK"
+  new="$(mktemp "$TH/run/Caddyfile.new.XXXXXX")"
+  blockf="$(mktemp "$TH/run/Caddyfile.blk.XXXXXX")"
+  snap="$(mktemp "$TH/run/Caddyfile.snap.XXXXXX")"
+  CLEANUP+=("$new" "$blockf" "$snap")
+  cp "$file" "$snap"
+  printf '%s\n' "$block" >"$blockf"
+  awk -v host="$host {" -v blockf="$blockf" '
+    { lines[NR] = $0 }
+    END {
+      h = 0
+      for (i = 1; i <= NR; i++) if (lines[i] == host) { h = i; break }
+      s = h
+      if (h > 1 && lines[h-1] ~ /^# thuammai — flood alerts API/) s = h - 1
+      e = 0
+      for (i = h + 1; i <= NR; i++) {
+        if (lines[i] ~ /^}[[:space:]]*(#.*)?$/) { e = i; break }
+        if (lines[i] ~ /^[^[:space:]#]/) exit 4
+      }
+      if (!h || !e) exit 3
+      for (i = 1; i < s; i++) print lines[i]
+      while ((getline l < blockf) > 0) print l
+      for (i = e + 1; i <= NR; i++) print lines[i]
+    }' "$snap" >"$new" || die "could not find the end of the $host block (a '}' in column 0 before the next site) — nothing changed"
+  say "---- new block / บล็อกใหม่ ----"
+  say "$block"
+  say "---- diff -u ----"
+  diff -u --label "$file" --label "$file (new)" "$file" "$new" || true
+  say "-------------------------"
+  if [ "$yes" = 1 ]; then ans=y; else ans="$(ask "Replace the block, validate and then reload the shared caddy? / แทนที่บล็อกนี้แล้วตรวจและรีโหลด caddy? [y/N]: ")" || ans=""; fi
+  yes_no "$ans" || { rm -f "$new" "$blockf" "$snap"; say "nothing changed / ไม่ได้แก้ไขอะไร"; return 0; }
+  caddy_apply "$file" "$new" updated "$snap"
+  rm -f "$new" "$blockf" "$snap"
 }
 
 cmd_finish() {
-  local host origin pre code out m
+  local host origins origin pre code out m
   lock_env
   host="$(env_get API_HOST)"
   valid_host "$host" || die "API_HOST in $TH/.env is not a plain host name"
-  origin="$(env_get SITE_ORIGIN)"
+  origins="$(env_get SITE_ORIGIN)"
   curl_api -f "https://$host/v1/health" >/dev/null || die "https://$host/v1/health does not answer through caddy (DNS? site block? thuammai status)"
-  pre="$(curl_api -o /dev/null -D - -X OPTIONS -H "Origin: $origin" -H 'Access-Control-Request-Method: POST' "https://$host/v1/push/subscription" | tr -d '\r')"
-  printf '%s\n' "$pre" | head -n 1 | grep -q ' 204' || die "CORS preflight did not answer 204"
-  printf '%s\n' "$pre" | grep -qi "^access-control-allow-origin: $origin\$" || die "CORS preflight has no access-control-allow-origin: $origin (a caddy snippet may override it)"
+  # Every origin in SITE_ORIGIN (a comma-separated list while the site moves) must pass CORS.
+  for origin in $(printf '%s' "$origins" | tr ',' ' '); do
+    origin="${origin%/}"
+    pre="$(curl_api -o /dev/null -D - -X OPTIONS -H "Origin: $origin" -H 'Access-Control-Request-Method: POST' "https://$host/v1/push/subscription" | tr -d '\r')"
+    printf '%s\n' "$pre" | head -n 1 | grep -q ' 204' || die "CORS preflight for $origin did not answer 204"
+    printf '%s\n' "$pre" | grep -qi "^access-control-allow-origin: $origin\$" || die "CORS preflight has no access-control-allow-origin: $origin (a caddy snippet may override it)"
+  done
   code="$(curl_api -o /dev/null -w '%{http_code}' "https://$host/")"
-  [ "$code" = 302 ] || die "https://$host/ answered $code, expected 302 to the web"
+  case "$code" in
+    200) say "https://$host/ answered 200 (the site is served here)" ;;
+    302) say "https://$host/ answered 302 (redirect to the web)" ;;
+    *) die "https://$host/ answered $code, expected 200 (the site) or 302 (redirect to the web)" ;;
+  esac
   say "ok: health, CORS and / through caddy"
   if [ -s "$TH/secrets/telegram_bot_token" ]; then
     if [ "$(env_get ALERTS_PAUSED)" = 1 ]; then
@@ -700,7 +801,13 @@ main() {
     pause) cmd_pause ;;
     resume) cmd_resume ;;
     finish) cmd_finish ;;
-    caddy) [ "${1:-}" = add ] || die "thuammai caddy add"; cmd_caddy_add ;;
+    caddy)
+      case "${1:-}" in
+        add) cmd_caddy_add ;;
+        update) shift; cmd_caddy_update "$@" ;;
+        *) die "thuammai caddy add | caddy update [--yes]" ;;
+      esac
+      ;;
     kuma) cmd_kuma ;;
     telegram)
       case "${1:-}" in

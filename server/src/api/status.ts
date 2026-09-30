@@ -1,4 +1,4 @@
-import type { Deps, Env } from './env';
+import { allowedOrigin, type Deps, type Env } from './env';
 import { empty, err, json } from './http';
 
 export type AlertsStatus = 'on' | 'paused' | 'stalled';
@@ -20,7 +20,8 @@ export async function alertsStatus(env: Env, now: Date): Promise<AlertsStatus> {
 
 /** GET /v1/status (spec §4.2, F1-7): any caller gets 200 (Uptime Kuma, vps-watch); CORS only for the site. */
 export async function statusRoute(req: Request, env: Env, deps: Deps): Promise<Response> {
-  const cors: Record<string, string> = req.headers.get('origin') === env.SITE_ORIGIN ? { 'access-control-allow-origin': env.SITE_ORIGIN, vary: 'Origin' } : { vary: 'Origin' };
+  const origin = allowedOrigin(req, env);
+  const cors: Record<string, string> = origin !== null ? { 'access-control-allow-origin': origin, vary: 'Origin' } : { vary: 'Origin' };
   if (req.method === 'OPTIONS') return empty(204, { ...cors, 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-max-age': '86400' });
   if (req.method !== 'GET') return err(405, 'method_not_allowed', cors);
   try {
