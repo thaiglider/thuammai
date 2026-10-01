@@ -16,7 +16,8 @@ export interface FollowRow {
 }
 export interface FollowUpdate { fid: number; alerted: 0 | 3 | 4; lastAlertAt: string | null; lastL4At: string | null; lastClearAt: string | null; trendNote: TrendFollow['trendNote']; trendAt: string | null }
 export interface Report { follows: FollowUpdate[]; deadTargets: number[]; donePending: number[] }
-export interface PendingRow { id: number; chat: number; k: string; lat: number; lon: number; createdAt: string }
+/** `fid`/`label` (Plan O): set only for a "ดู" request whose follow still belongs to this chat and key. */
+export interface PendingRow { id: number; chat: number; k: string; lat: number; lon: number; createdAt: string; fid: number | null; label: string | null }
 /** Place-level alert state (phase-2 spec §3) — rows of point_state plus alert_run.gen. */
 export interface AlertStateBlob { v: 1; gen: string; places: Record<string, PointState> }
 

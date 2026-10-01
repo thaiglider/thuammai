@@ -46,6 +46,7 @@ status_is() { [[ "$(api https://flood.test/v1/status 2>/dev/null || true)" == *"
 kuma_has() { [[ "$(records)" == *"\"name\":\"$1\",\"status\":\"$3\",\"msg\":\"$2\""* ]]; }
 health_ok() { [ "$(code https://flood.test/v1/health)" = 200 ]; }
 pushes_ge() { [ "$(count push)" -ge "$1" ]; }
+tg_ge() { [ "$(count tg method "$1")" -ge "$2" ]; }
 
 step "fixture data and three images: A, B (api exits at start), A2"
 npm run pipeline:fixtures >/dev/null
@@ -151,6 +152,11 @@ upd='{"update_id":1,"message":{"message_id":1,"date":0,"chat":{"id":4242,"type":
 [ "$(code -X POST -H 'content-type: application/json' -H "x-telegram-bot-api-secret-token: $(cat "$TH/secrets/telegram_webhook_secret")" -d "$upd" https://flood.test/v1/telegram)" = 200 ] || fail "telegram update"
 [ "$(count tg chat 4242)" -ge 1 ] || fail "the bot did not answer /help through the fake Telegram"
 
+step "Telegram: chat 4242 follows the fixture's level-4 place"
+cb='{"update_id":2,"callback_query":{"id":"cb2","from":{"id":4242,"is_bot":false,"first_name":"x"},"data":"f:13.854,100.587","message":{"message_id":1,"date":0,"chat":{"id":4242,"type":"private"}}}}'
+[ "$(code -X POST -H 'content-type: application/json' -H "x-telegram-bot-api-secret-token: $(cat "$TH/secrets/telegram_webhook_secret")" -d "$cb" https://flood.test/v1/telegram)" = 200 ] || fail "telegram follow"
+[ "$(docker exec thuammai-db-1 psql -U postgres -d thuammai -Atc "SELECT COUNT(*) FROM follow f JOIN target t ON t.id = f.target_id WHERE t.channel = 'tg'")" = 1 ] || fail "the Telegram follow was not stored"
+
 step "a real alert reaches the fake FCM (fixture level 4)"
 docker exec thuammai-db-1 psql -U postgres -d thuammai -qc 'UPDATE alert_run SET gen = NULL' >/dev/null
 docker exec thuammai-db-1 psql -U postgres -d thuammai -qc 'TRUNCATE point_state' >/dev/null
@@ -158,6 +164,12 @@ bash "$CLI" restart alerts >/dev/null
 wait_for 180 pushes_ge 1 || fail "no push reached the fake FCM"
 [[ "$(records)" == *'"urgency":"high"'* ]] || fail "the push was not urgent"
 wait_for 90 kuma_has ciTokAlerts OK up || fail "no Kuma push up from alerts"
+# Plan O: the Telegram follower gets the alert text and then the chart photo, drawn by the real
+# renderer with the bundled font inside the image (a PNG upload, not a file_id).
+wait_for 120 tg_ge sendPhoto 1 || fail "no chart photo reached the fake Telegram ($(docker logs thuammai-alerts-1 2>&1 | tail -5))"
+[[ "$(records)" == *'"method":"sendPhoto","chat":4242'* ]] || fail "the chart photo did not go to the follower"
+[[ "$(records)" =~ \"method\":\"sendPhoto\",\"chat\":4242,\"bytes\":[0-9]+,\"upload\":1 ]] || fail "the chart photo was not uploaded as a PNG"
+[[ "$(docker logs thuammai-alerts-1 2>&1)" =~ alerts\ start\ [^$'\n']*charts=1 ]] || fail "the alerts start line does not say charts=1"
 
 step "rate limit: spoofed X-Forwarded-For / CF-Connecting-IP cannot dodge it; another peer has its own bucket"
 del='{"endpoint":"https://fcm.googleapis.com/fcm/send/x","auth":"'"$AUTH"'"}'

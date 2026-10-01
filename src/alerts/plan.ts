@@ -99,7 +99,9 @@ export type PlannedKind = AlertKind | TrendKind;
 export type PlannedState = FollowState & TrendFollow;
 /** `base` (trends only): a level-state change of this same run (e.g. alerted 4 → 3) with the stored
  *  trend fields — it must be written whether or not the trend goes out (capPlanned). */
-export interface Planned { f: FollowRow; kind: PlannedKind | null; next: PlannedState; msg: AlertMessage | null; base?: PlannedState }
+export interface Planned { f: FollowRow; kind: PlannedKind | null; next: PlannedState; msg: AlertMessage | null; base?: PlannedState;
+  /** clear only: until when a new level-3 alert stays quiet (the message says so). */
+  quietUntil?: string | null }
 /** alert4 > alert3 > clear > trend (H4 §2.2), then state-only changes. */
 const RANK: Record<PlannedKind, number> = { alert4: 0, alert3: 1, clear: 2, trend_fall: 3, trend_rise: 3, trend_fast: 3 };
 export const isTrendKind = (k: PlannedKind | null): k is TrendKind => k === 'trend_fall' || k === 'trend_rise' || k === 'trend_fast';
@@ -118,7 +120,7 @@ export function planFollows(follows: FollowRow[], points: Map<string, PointEval>
       // LINE never takes part in trends: its trend fields stay exactly as stored.
       const tf = f.ch === 'line' ? was : resetTrendOnAlert(was);
       const msg = d.kind === 'clear' ? clearMessage(e.a.level as 1 | 2, gen, d.quietUntil) : alertMessage(e.step.shown as 3 | 4, e.a, gen, e.joined);
-      out.push({ f, kind: d.kind, next: { ...d.next, ...tf }, msg });
+      out.push({ f, kind: d.kind, next: { ...d.next, ...tf }, msg, ...(d.kind === 'clear' ? { quietUntil: d.quietUntil } : {}) });
       continue;
     }
     if (trendOn && f.ch !== 'line' && e.trend) {

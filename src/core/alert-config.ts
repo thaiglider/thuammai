@@ -19,6 +19,8 @@ export const CAPS = {
   newTargetsPerDay: 10_000,
   newPlacesPerTargetPerDay: 30, // per-target churn cap (spec §8 review): caps repeated resubscribe-with-new-places abuse
   pushPerRun: 20_000, tgPerRun: 8_000,
+  // Plan O (spec §3.2–3.3): chart photos are best-effort — stations drawn per snapshot, photos per run.
+  tgChartsPerRun: 300, tgPhotosPerRun: 4_000,
   tgLabelMax: 20, tgPendingPerChat: 3, tgPendingTtlMin: 30,
   tgAwaitMin: 15, // the "name this place" wait after a follow expires (final review I2)
   batch: 200,

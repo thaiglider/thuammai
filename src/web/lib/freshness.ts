@@ -1,4 +1,7 @@
+import { relativeAge } from '../../core/reason-text';
 import { fmtTime } from '../../core/time';
+
+export { relativeAge };
 
 export type FreshState = 'fresh' | 'late' | 'veryLate' | 'offline';
 const MIN = 60e3;
@@ -20,13 +23,6 @@ export function freshness(generatedAt: string, now: Date, online: boolean) {
   const hh = Math.floor(ageMin / 60);
   const mm = ageMin % 60;
   return { state: 'veryLate' as FreshState, ageMin, grey, text: `ข้อมูลช้า ${hh} ชม.${mm ? ` ${mm} นาที` : ''}` };
-}
-
-export function relativeAge(iso: string, now: Date): string {
-  const m = Math.round((now.getTime() - Date.parse(iso)) / MIN);
-  if (m < 2) return 'เมื่อสักครู่';
-  if (m < 60) return `${m} นาทีก่อน`;
-  return `${Math.floor(m / 60)} ชม. ก่อน`;
 }
 
 /** Shown next to anything greyed because the snapshot is old or the device is offline. */

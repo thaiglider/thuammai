@@ -5,9 +5,9 @@ import { inThailand } from '../../../src/core/geo';
 import { ACB } from '../../../src/core/line-text';
 import {
   ALREADY_TH, CANCEL_BUTTON_TH, CB, coordsReadText, dbDownText, defaultLabel, DISMISS_BUTTON_TH, FOLLOW_BUTTON_TH, followedText, fullSystemText,
-  helpText, labelSetText, listText, MAX_FOLLOWS_TH, NEW_FOLLOWS_CAP_TH, NO_FOLLOWS_TH, NOT_A_REPORT_TH, NOT_FOUND_TH,
+  FOLLOW_FALLBACK_LABEL_TH, FOLLOWED_BUTTON_TH, helpText, labelSetText, listText, MAX_FOLLOWS_TH, NEW_FOLLOWS_CAP_TH, NO_FOLLOWS_TH, NOT_A_REPORT_TH, NOT_FOUND_TH,
   OTHER_TH, OUTSIDE_TH, pausedText, provinceTitle, SEND_LOCATION_TH, siteLink, skipText, stage1Text, START_TH, STOP_ALL_BUTTON_TH, STOP_CONFIRM_TH,
-  STOPPED_TH, tgName, unfollowButtonText, unfollowedText, type Stage1,
+  STALLED_LINE_TH, STOPPED_TH, tgName, UNFOLLOW_BUTTON_TH, unfollowedText, VIEW_FULL_TH, viewButtonText, type Stage1,
 } from '../../../src/core/tg-text';
 import { provinceArea, provinceFor } from './areas';
 import { addCounts, boundedCount, capsAllow } from './caps';
@@ -29,7 +29,7 @@ export interface TgMsg {
 export interface TgCallback { id: string; data?: unknown; message: TgMsg }
 export interface TgCtx { env: Env; deps: Deps; api: TgApi; chat: number; now: Date; answered: boolean }
 
-export const LOCATION_KEYBOARD: ReplyMarkup = { keyboard: [[{ text: SEND_LOCATION_TH, request_location: true }]], resize_keyboard: true };
+export const LOCATION_KEYBOARD: ReplyMarkup = { keyboard: [[{ text: SEND_LOCATION_TH, request_location: true }, { text: FOLLOWED_BUTTON_TH }]], resize_keyboard: true };
 const AREA_STALE_MIN = 180;
 
 /** POST /v1/telegram (phase-2 spec §4, §7). 200 whenever the secret is right, so Telegram never resends. */
@@ -63,7 +63,7 @@ const isDeletion = (msg: TgMsg | null, cb: TgCallback | null): boolean =>
 const isAdminCallback = (data: string): boolean => ACB.approve.test(data) || ACB.reject.test(data) || ACB.revoke.test(data);
 /** While paused (F1-8, G-6): deleting, listing, help, unfollow, cancel and the admin still work. */
 const allowedWhilePaused = (msg: TgMsg | null, cb: TgCallback | null): boolean =>
-  (msg !== null && typeof msg.text === 'string' && PAUSE_OK_CMD_RE.test(msg.text.trim())) ||
+  (msg !== null && typeof msg.text === 'string' && (PAUSE_OK_CMD_RE.test(msg.text.trim()) || msg.text.trim() === FOLLOWED_BUTTON_TH)) ||
   (cb !== null && typeof cb.data === 'string' && (CB.stopAll.test(cb.data) || CB.unfollow.test(cb.data) || CB.dismiss.test(cb.data) || isAdminCallback(cb.data)));
 
 export async function handleUpdate(update: unknown, env: Env, deps: Deps): Promise<void> {
@@ -113,6 +113,8 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
     return onLocation(c, typed.lat, typed.lon, true);
   }
   await db.query('UPDATE target SET synced_at = $1 WHERE chat_id = $2', [c.now, c.chat]);
+  // The "จุดที่ติดตาม" key (Plan O spec §4): the list — never a name, and it does not end a wait for one.
+  if (text === FOLLOWED_BUTTON_TH) return onList(c);
   const cmd = text.match(/^\/([a-z_]+)(?:@\w+)?(?:\s|$)/i)?.[1]?.toLowerCase() ?? null;
   // The wait is measured from the awaited follow's own created_at: CAPS.tgAwaitMin minutes.
   const t = (await db.query<{ tg_await: string | null; since: Date | null }>('SELECT t.tg_await AS tg_await, f.created_at AS since FROM target t LEFT JOIN follow f ON f.target_id = t.id AND f.key = t.tg_await WHERE t.chat_id = $1', [c.chat])).rows[0];
@@ -122,7 +124,7 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
   if (stored && (cmd !== null || !awaiting)) await db.query('UPDATE target SET tg_await = NULL WHERE chat_id = $1', [c.chat]);
   if (cmd !== null) {
     if (cmd === 'start') { await c.api.send(c.chat, START_TH, LOCATION_KEYBOARD); return; }
-    if (cmd === 'help') { await c.api.send(c.chat, helpText(publicUrl(c.env))); return; }
+    if (cmd === 'help') { await c.api.send(c.chat, helpText(publicUrl(c.env)), LOCATION_KEYBOARD); return; }
     if (cmd === 'list') return onList(c);
     if (cmd === 'stop') {
       await c.api.send(c.chat, STOP_CONFIRM_TH, { inline_keyboard: [[{ text: STOP_ALL_BUTTON_TH, callback_data: 'x:all' }, { text: CANCEL_BUTTON_TH, callback_data: 'no' }]] });
@@ -145,8 +147,8 @@ async function onMessage(c: TgCtx, m: TgMsg): Promise<void> {
 async function onList(c: TgCtx): Promise<void> {
   const r = (await c.env.db.query<{ id: number; label: string | null; key: string }>('SELECT f.id AS id, f.label AS label, f.key AS key FROM follow f JOIN target t ON t.id = f.target_id WHERE t.chat_id = $1 ORDER BY f.id', [c.chat])).rows;
   if (!r.length) { await c.api.send(c.chat, NO_FOLLOWS_TH); return; }
-  const rows = r.map((x) => ({ id: x.id, key: x.key, label: x.label ?? 'จุดที่ติดตาม' }));
-  await c.api.send(c.chat, listText(rows), { inline_keyboard: rows.map((x) => [{ text: unfollowButtonText(x.label), callback_data: `u:${x.id}` }]) });
+  const rows = r.map((x) => ({ id: x.id, key: x.key, label: x.label ?? FOLLOW_FALLBACK_LABEL_TH }));
+  await c.api.send(c.chat, listText(rows), { inline_keyboard: rows.map((x) => [{ text: viewButtonText(x.label), callback_data: `v:${x.id}` }, { text: UNFOLLOW_BUTTON_TH, callback_data: `u:${x.id}` }]) });
 }
 
 async function onSkip(c: TgCtx, key: string): Promise<void> {
@@ -165,15 +167,19 @@ async function onLabel(c: TgCtx, key: string, text: string): Promise<void> {
   await c.api.send(c.chat, r ? labelSetText(label) : NOT_FOUND_TH);
 }
 
-/** At most CAPS.tgPendingPerChat fresh questions per chat. */
-async function addPending(c: TgCtx, key: string): Promise<'added' | 'full'> {
+/** At most CAPS.tgPendingPerChat fresh questions per chat. `fid` (Plan O): the follow a "ดู"
+ *  request is for — a question already waiting for that key takes it over, never a second row. */
+async function addPending(c: TgCtx, key: string, fid: number | null = null): Promise<'added' | 'full'> {
   const db = c.env.db;
   const cut = new Date(c.now.getTime() - CAPS.tgPendingTtlMin * 60e3);
   await db.query('DELETE FROM tg_pending WHERE chat_id = $1 AND created_at < $2', [c.chat, cut]);
   const r = (await db.query<{ n: number; mine: number }>('SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE key = $1) AS mine FROM tg_pending WHERE chat_id = $2', [key, c.chat])).rows[0];
-  if ((r?.mine ?? 0) > 0) return 'added';
+  if ((r?.mine ?? 0) > 0) {
+    if (fid !== null) await db.query('UPDATE tg_pending SET fid = $1 WHERE chat_id = $2 AND key = $3', [fid, c.chat, key]);
+    return 'added';
+  }
   if ((r?.n ?? 0) >= CAPS.tgPendingPerChat) return 'full';
-  await db.query('INSERT INTO tg_pending (chat_id, key, created_at) VALUES ($1, $2, $3) ON CONFLICT (chat_id, key) DO NOTHING', [c.chat, key, c.now]);
+  await db.query('INSERT INTO tg_pending (chat_id, key, created_at, fid) VALUES ($1, $2, $3, $4) ON CONFLICT (chat_id, key) DO UPDATE SET fid = COALESCE(excluded.fid, tg_pending.fid)', [c.chat, key, c.now, fid]);
   return 'added';
 }
 
@@ -222,6 +228,8 @@ async function onCallback(c: TgCtx, cb: TgCallback): Promise<void> {
   if (f) return onFollow(c, f[1]!);
   const u = data.match(CB.unfollow);
   if (u) return onUnfollow(c, Number(u[1]));
+  const v = data.match(CB.view);
+  if (v) return onView(c, Number(v[1]));
   if (CB.stopAll.test(data)) return onStopAll(c);
   if (CB.dismiss.test(data)) { await c.api.clearButtons(c.chat, cb.message.message_id); return; }
   if (isAdminCallback(data)) { await onAdminCallback(c, data, cb.message.message_id); return; }
@@ -273,6 +281,18 @@ async function onUnfollow(c: TgCtx, fid: number): Promise<void> {
   if (!r) { await c.api.send(c.chat, NOT_FOUND_TH); return; }
   await db.query('UPDATE target SET tg_await = NULL WHERE chat_id = $1 AND tg_await = $2', [c.chat, r.key]);
   await c.api.send(c.chat, unfollowedText(r.label ?? 'จุดที่ติดตาม'));
+}
+
+/** "ดู" (Plan O spec §4): queue the followed place like a location question; the alerts process
+ *  answers with the card and its chart. Nothing is promised here, so no message unless it cannot.
+ *  Once queued, a NOTIFY moves the alerts process's next tick forward (like LINE, phase-3C spec
+ *  §5.2); a NOTIFY that fails is nothing to report — the next regular tick answers. */
+async function onView(c: TgCtx, fid: number): Promise<void> {
+  const f = (await c.env.db.query<{ key: string }>('SELECT f.key AS key FROM follow f JOIN target t ON t.id = f.target_id WHERE f.id = $1 AND t.chat_id = $2', [fid, c.chat])).rows[0];
+  if (!f) { await c.api.send(c.chat, NOT_FOUND_TH); return; }
+  if ((await alertsStatus(c.env, c.now)) === 'stalled') { await c.api.send(c.chat, `${STALLED_LINE_TH}\nดูบนเว็บ: ${siteLink(publicUrl(c.env), f.key)}`); return; }
+  if ((await addPending(c, f.key, fid)) === 'full') { await c.api.send(c.chat, VIEW_FULL_TH); return; }
+  try { await c.env.db.query("SELECT pg_notify('thuammai_wake', '')"); } catch { /* queued: the next regular tick answers */ }
 }
 
 async function onStopAll(c: TgCtx): Promise<void> {

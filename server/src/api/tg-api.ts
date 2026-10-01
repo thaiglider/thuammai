@@ -1,5 +1,8 @@
+import type { TgInlineButton } from '../../../src/core/tg-text';
+
 export interface TgResult { ok: boolean; status: number }
-export interface InlineButton { text: string; callback_data: string }
+/** A callback button or a link button (Plan O spec §2.4). */
+export type InlineButton = TgInlineButton;
 export type ReplyMarkup =
   | { inline_keyboard: InlineButton[][] }
   | { keyboard: { text: string; request_location?: boolean }[][]; resize_keyboard?: boolean };

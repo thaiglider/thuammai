@@ -23,13 +23,19 @@ https({ key: readFileSync('/certs/fake.key'), cert: readFileSync('/certs/fake.pe
     const method = (req.url ?? '').split('/').pop();
     let j;
     try { j = JSON.parse(b.toString() || '{}'); } catch { j = {}; }
-    rec.tg.push({ method, chat: j.chat_id ?? null });
+    // sendPhoto with a PNG arrives as multipart: read chat_id from the form, keep sizes only.
+    const ct = req.headers['content-type'] ?? '';
+    const form = ct.startsWith('multipart/form-data') ? /name="chat_id"\r\n\r\n(-?\d+)/.exec(b.toString('latin1')) : null;
+    const chat = j.chat_id ?? (form ? Number(form[1]) : null);
+    rec.tg.push({ method, chat, bytes: b.length, upload: form ? 1 : 0 });
     if (method === 'setWebhook') webhook = j.url ?? '';
     if (method === 'deleteWebhook') webhook = '';
+    const message = { message_id: rec.tg.length, chat: { id: chat ?? 0, type: 'private' }, date: 0 };
     const result = method === 'getMe' ? { username: 'thuammai_ci_bot' }
       : method === 'getWebhookInfo' ? { url: webhook, pending_update_count: 0 }
-        : method === 'sendMessage' ? { message_id: rec.tg.length, chat: { id: j.chat_id ?? 0, type: 'private' }, date: 0 }
-          : true;
+        : method === 'sendMessage' ? message
+          : method === 'sendPhoto' ? { ...message, photo: [{ file_id: 'ci-photo-small', width: 90, height: 45 }, { file_id: 'ci-photo-1', width: 960, height: 480 }] }
+            : true;
     return json(res, 200, { ok: true, result });
   }
   res.writeHead(404);

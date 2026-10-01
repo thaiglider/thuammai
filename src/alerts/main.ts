@@ -1,17 +1,20 @@
 import { CAPS, LINE } from '../core/alert-config';
 import type { FollowState } from '../core/alert-rule';
 import { staleWaterSources } from '../core/source-watch';
-import { siteLink, tgAlertText } from '../core/tg-text';
-import { pointAnswerText, type Stored } from './answer';
+import { TG_TEXT_MAX } from '../core/tg-card';
+import { FOLLOW_FALLBACK_LABEL_TH, siteLink, tgAlertText } from '../core/tg-text';
+import { alertOut, pendingOut, pointAnswerText, type Stored, type TgOut } from './answer';
+import type { ChartSource } from './chart';
 import { lineFor, sendLine } from './line';
 import type { LineRepo } from './line-repo';
 import { errorCounts, type Counts, type LogEvent } from './log';
 import { capPlanned, evaluatePointsYielding, isTrendKind, keysToQuery, planFollows, recomputeEp, toUpdate, type Planned, type PointEval } from './plan';
+import { sendChartPhotos, type PhotoReq } from './photos';
 import { newPushRun, sendPush, type PushRun, type SendNotification, type Vapid } from './push';
 import { RepoError, type AlertRepo, type FollowRow, type PendingRow } from './repo';
 import type { Snapshot } from './snapshot';
 import { watchSources, type SourceWatchRepo } from './source-watch';
-import { sendTelegram, tgSender, type Clock, type TgSend } from './telegram';
+import { sendTelegram, tgPhotoSender, tgSender, type Clock, type TgPhotoSend, type TgSend } from './telegram';
 
 export interface AlertEnv {
   VAPID_PUBLIC_KEY?: string; VAPID_PRIVATE_KEY?: string; VAPID_SUBJECT?: string;
@@ -25,6 +28,8 @@ export interface AlertEnv {
   TREND_ALERTS?: string;
   /** '0' turns the stale-source watch (owner alert in the admin chat) off. Default on. */
   SOURCE_WATCH?: string;
+  /** '0' turns the chart photos off (the detail texts still go). Default on. */
+  TG_CHARTS?: string;
 }
 export interface AlertDeps {
   repo: AlertRepo; env: AlertEnv;
@@ -39,15 +44,25 @@ export interface AlertDeps {
   lineRepo?: LineRepo;
   /** Stale-source watch state (source_watch); absent → the watch only counts `stale`. */
   watchRepo?: SourceWatchRepo;
+  /** Tests inject the photo call; otherwise it is built from TELEGRAM_BOT_TOKEN. */
+  tgPhoto?: TgPhotoSend;
+  /** Week charts as PNG (Plan O); absent → no chart photos. */
+  charts?: ChartSource;
 }
 /** No new send after this long from the start of the run (spec §7.5): below the 10-minute
  *  snapshot cycle and the 10-minute stuck-run watchdog of the alerts process. */
 export const SEND_BUDGET_MS = 7 * 60_000;
 export const PUSH_CONCURRENCY = 100;
+/** Between runs the chart photos get this long (Plan O final review): a burst of "ดู" presses
+ *  must not hold the tick — and so the detection of a new snapshot — for the whole send budget. */
+export const TICK_PHOTO_BUDGET_MS = 90_000;
 
 export interface RunResult { event: LogEvent; counts: Counts; exitCode: number }
-/** Telegram for this run; its clock is the run's clock, so there is one send deadline. */
-interface Tg { send: TgSend; site: string; clock: Clock }
+/** Telegram for this run; its clock is the run's clock, so there is one send deadline. `photo`
+ *  and `charts` are both set or both null. */
+interface Tg { send: TgSend; site: string; clock: Clock; photo: TgPhotoSend | null; charts: ChartSource | null }
+/** Chart photos owed for texts already sent; `stopped` = Telegram stopped this run (429/401). */
+interface PhotoQueue { reqs: PhotoReq[]; stopped: boolean }
 
 const chunks = <T>(xs: T[], n: number): T[][] => {
   const out: T[][] = [];
@@ -64,11 +79,56 @@ export function linkBase(e: Pick<AlertEnv, 'SITE_URL' | 'PUBLIC_URL'>): string {
   const u = e.PUBLIC_URL || e.SITE_URL || '';
   return u.endsWith('/') ? u : `${u}/`;
 }
+/** Chart photos are on unless TG_CHARTS is exactly '0'. */
+export const chartsOn = (e: Pick<AlertEnv, 'TG_CHARTS'>): boolean => e.TG_CHARTS !== '0';
+
 function tgFor(d: AlertDeps, clock: () => number): Tg | null {
   const e = d.env;
   if (!e.TELEGRAM_BOT_TOKEN || !e.SITE_URL) return null;
+  const charts = chartsOn(e) && d.charts ? d.charts : null;
   // Links need the site URL with a trailing slash (ruling 12).
-  return { send: d.tgSend ?? tgSender(e.TELEGRAM_BOT_TOKEN, d.fetch), site: linkBase(e), clock: { now: clock, sleep: d.sleep } };
+  return { send: d.tgSend ?? tgSender(e.TELEGRAM_BOT_TOKEN, d.fetch), site: linkBase(e), clock: { now: clock, sleep: d.sleep }, charts, photo: charts ? (d.tgPhoto ?? tgPhotoSender(e.TELEGRAM_BOT_TOKEN, d.fetch)) : null };
+}
+
+/** A card with the short text Telegram gets if it rejects the card (`sendTelegram`'s `fallback`);
+ *  none when the message already is the short text. */
+interface TgSafe extends TgOut { fallback?: string }
+/** The short text as a card's fallback: a throw there must not cost the card itself. */
+const orNone = (short: () => string): string | undefined => { try { return short(); } catch { return undefined; } };
+
+/** An alert is never lost to its details (Plan O spec §2): any failure building the card —
+ *  a null, a throw or a text longer than Telegram accepts — sends the short text instead, counted
+ *  as tg_card_err. */
+function alertOutSafe(p: Planned, e: PointEval | undefined, snap: Snapshot, site: string, counts: Counts): TgSafe {
+  const short = () => tgAlertText(p.f.label ?? FOLLOW_FALLBACK_LABEL_TH, p.msg!, siteLink(site, p.f.key));
+  try {
+    const o = alertOut(p, e, snap, site);
+    if (o && o.text.length <= TG_TEXT_MAX) return { ...o, fallback: orNone(short) };
+  } catch { /* fall through to the short text */ }
+  counts.tg_card_err = (counts.tg_card_err ?? 0) + 1;
+  return { text: short(), markup: undefined, chart: null };
+}
+
+/** The same for an answer: the short text (LINE's) when the card cannot be built or is too long. */
+function pendingOutSafe(q: PendingRow, snap: Snapshot, points: Map<string, PointEval>, stored: Stored, site: string, counts: Counts): TgSafe {
+  const short = () => pointAnswerText(q, snap, points, stored, site);
+  try {
+    const o = pendingOut(q, snap, points, stored, site);
+    if (o.text.length <= TG_TEXT_MAX) return { ...o, fallback: orNone(short) };
+  } catch { /* fall through to the short text */ }
+  counts.tg_card_err = (counts.tg_card_err ?? 0) + 1;
+  return { text: short(), markup: undefined, chart: null };
+}
+
+/** Chart photos, after every text of the run (Plan O spec §3.3): best-effort, never fails a run. */
+async function sendPhotos(d: AlertDeps, tg: Tg, gen: string, ph: PhotoQueue, deadline: number, counts: Counts): Promise<void> {
+  if (!tg.photo || !tg.charts || !ph.reqs.length) return;
+  if (ph.stopped) { counts.tg_photo_skip = (counts.tg_photo_skip ?? 0) + ph.reqs.length; return; }
+  try {
+    add(counts, await sendChartPhotos(ph.reqs, gen, { charts: tg.charts, send: tg.photo, clock: tg.clock, deadline, stopping: () => d.stopping?.() === true }));
+  } catch {
+    counts.tg_photo_err = 1;
+  }
 }
 /** A store failure is not our bug (F1-4): skip, the loop retries this gen. */
 const failed = (err: unknown, counts: Counts = {}, event: LogEvent = 'skip'): RunResult => (err instanceof RepoError
@@ -94,12 +154,14 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
   const prev = await d.repo.loadState();
   const stored: Stored = (k) => prev?.places[k];
   const counts: Counts = { places: places.length };
+  const ph: PhotoQueue = { reqs: [], stopped: false };
   if (!snap.ok) counts[`snapshot_${snap.reason}`] = 1;
   if (snap.ok && prev && Date.parse(snap.gen) <= Date.parse(prev.gen)) {
     // No alerts from a snapshot already evaluated (D2), but questions are still answered (E11).
     counts.not_newer = 1;
     const sigterm = d.stopping?.() === true;
-    const bad = tg ? await answerPendingSafe(d, snap, new Map(), stored, tg, run, CAPS.tgPerRun, sigterm, counts) : null;
+    const bad = tg ? await answerPendingSafe(d, snap, new Map(), stored, tg, run, CAPS.tgPerRun, sigterm, counts, ph) : null;
+    if (tg) await sendPhotos(d, tg, snap.gen, ph, run.deadline, counts);
     if (run.timedOut) counts.send_deadline = 1;
     if (sigterm) counts.stopping = 1;
     return bad ?? { event: 'skip', counts, exitCode: 0 };
@@ -153,11 +215,22 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
     for (const c of chunks(capped.send.filter((p) => p.f.ch === 'tg' && p.f.chat !== null && p.msg !== null), CAPS.batch)) {
       halt();
       if (tgStopped || run.timedOut || sigterm) { counts.tg_deferred = (counts.tg_deferred ?? 0) + c.length; continue; }
-      const out = await sendTelegram(c.map((p) => ({ chat: p.f.chat!, text: tgAlertText(p.f.label ?? 'จุดที่ติดตาม', p.msg!, siteLink(tg.site, p.f.key)), ref: p })), tg.send, tg.clock, run.deadline);
+      const outs = new Map<Planned, TgOut>();
+      const items = c.map((p) => {
+        const o = alertOutSafe(p, ev.points.get(p.f.key), snap, tg.site, counts);
+        outs.set(p, o);
+        return { chat: p.f.chat!, text: o.text, markup: o.markup, fallback: o.fallback, ref: p };
+      });
+      const out = await sendTelegram(items, tg.send, tg.clock, run.deadline);
       tgUsed += c.length;
       add(counts, out.counts);
       tgStopped = out.stopped;
+      if (out.stopped) ph.stopped = true;
       if (out.stopped && run.clock() >= run.deadline) run.timedOut = true;
+      for (const p of out.ok) {
+        const ch = outs.get(p)?.chart;
+        if (ch) ph.reqs.push({ chat: p.f.chat!, stationId: ch.id, km: ch.km, label: p.f.label ?? FOLLOW_FALLBACK_LABEL_TH });
+      }
       if (out.ok.length || out.dead.length) {
         await d.repo.report({ follows: out.ok.map(toUpdate), deadTargets: [...new Set(out.dead.map((p) => p.f.targetId))], donePending: [] });
         record(out.ok);
@@ -192,7 +265,8 @@ async function runWith(d: AlertDeps, snap: Snapshot, vapid: Vapid, run: PushRun,
   // The owner hears about stale sources once per new gen; never blocks or fails the run.
   if (!sigterm) await watchSafe(d, snap, counts);
   halt();
-  const bad = tg ? await answerPendingSafe(d, snap, ev.points, stored, tg, run, CAPS.tgPerRun - tgUsed, tgStopped || sigterm, counts) : null;
+  const bad = tg ? await answerPendingSafe(d, snap, ev.points, stored, tg, run, CAPS.tgPerRun - tgUsed, tgStopped || sigterm, counts, ph) : null;
+  if (tg) await sendPhotos(d, tg, snap.gen, ph, run.deadline, counts);
   if (run.timedOut) counts.send_deadline = 1;
   if (sigterm) counts.stopping = 1;
   counts.ms = Date.now() - started;
@@ -219,9 +293,9 @@ async function watchSafe(d: AlertDeps, snap: Snapshot, counts: Counts): Promise<
 /** Questions are answered after the state is written, so their failure must not lose the run's
  *  counts (final review M9): `pending_error=1` plus the counts so far. A store failure is not an
  *  error (the questions stay queued); anything else is. */
-async function answerPendingSafe(d: AlertDeps, snap: Snapshot, points: Map<string, PointEval>, stored: Stored, tg: Tg, run: PushRun, budget: number, stopped: boolean, counts: Counts): Promise<RunResult | null> {
+async function answerPendingSafe(d: AlertDeps, snap: Snapshot, points: Map<string, PointEval>, stored: Stored, tg: Tg, run: PushRun, budget: number, stopped: boolean, counts: Counts, ph: PhotoQueue): Promise<RunResult | null> {
   try {
-    await answerPending(d.repo, await d.repo.tgPending(d.now()), snap, points, stored, tg, run, budget, stopped, counts, () => d.stopping?.() === true);
+    await answerPending(d.repo, await d.repo.tgPending(d.now()), snap, points, stored, tg, run, budget, stopped, counts, () => d.stopping?.() === true, ph);
     return null;
   } catch (err) {
     counts.pending_error = 1;
@@ -235,11 +309,12 @@ async function answerPendingSafe(d: AlertDeps, snap: Snapshot, points: Map<strin
  *  process), and each chunk is marked done right after it is sent — so a stop, a crash or a
  *  failed report repeats at most one chunk (at-least-once, like the alerts). Answered and
  *  dead-chat questions are done; deferred ones stay queued. */
-async function answerPending(repo: AlertRepo, pending: PendingRow[], snap: Snapshot, points: Map<string, PointEval>, stored: Stored, tg: Tg, run: PushRun, budget: number, stopped: boolean, counts: Counts, sigterm: () => boolean): Promise<void> {
+async function answerPending(repo: AlertRepo, pending: PendingRow[], snap: Snapshot, points: Map<string, PointEval>, stored: Stored, tg: Tg, run: PushRun, budget: number, stopped: boolean, counts: Counts, sigterm: () => boolean, ph: PhotoQueue): Promise<void> {
   counts.pending = pending.length;
   if (!pending.length) return;
   // Telegram already stopped this run (429 or 401): no further request, everything waits (M2).
   const now = stopped ? [] : pending.slice(0, Math.max(0, budget));
+  if (stopped) ph.stopped = true;
   counts.pending_ok = 0;
   counts.pending_dead = 0;
   counts.pending_deferred = pending.length - now.length;
@@ -248,13 +323,26 @@ async function answerPending(repo: AlertRepo, pending: PendingRow[], snap: Snaps
   for (const c of chunks(now, CAPS.batch)) {
     if (!tgStopped && !halted && sigterm()) { halted = true; counts.stopping = 1; }
     if (tgStopped || halted) { counts.pending_deferred += c.length; continue; }
-    const out = await sendTelegram(c.map((q) => ({ chat: q.chat, text: pointAnswerText(q, snap, points, stored, tg.site), ref: q })), tg.send, tg.clock, run.deadline);
+    const outs = new Map<number, TgOut>();
+    const items = c.map((q) => {
+      const o = pendingOutSafe(q, snap, points, stored, tg.site, counts);
+      outs.set(q.id, o);
+      return { chat: q.chat, text: o.text, markup: o.markup, fallback: o.fallback, ref: q };
+    });
+    const out = await sendTelegram(items, tg.send, tg.clock, run.deadline);
     if (out.stopped) {
       tgStopped = true;
+      ph.stopped = true;
       if (run.clock() >= run.deadline) run.timedOut = true;
+    }
+    for (const q of out.ok) {
+      const ch = outs.get(q.id)?.chart;
+      if (ch) ph.reqs.push({ chat: q.chat, stationId: ch.id, km: ch.km, label: q.fid !== null ? (q.label ?? FOLLOW_FALLBACK_LABEL_TH) : null });
     }
     const auth = out.counts.tg_auth ?? 0;
     if (auth) counts.tg_auth = (counts.tg_auth ?? 0) + auth;
+    const fallback = out.counts.tg_fallback ?? 0;
+    if (fallback) counts.tg_fallback = (counts.tg_fallback ?? 0) + fallback;
     counts.pending_ok += out.counts.tg_ok ?? 0;
     counts.pending_dead += out.counts.tg_dead ?? 0;
     counts.pending_deferred += (out.counts.tg_deferred ?? 0) + auth;
@@ -281,7 +369,10 @@ export async function answerQuestions(d: AlertDeps, snap: Snapshot): Promise<Run
     if (!pending.length) return { event: 'send', counts: { pending: 0 }, exitCode: 0 };
     // An unusable snapshot answers without levels: no stored hysteresis needed.
     const states = snap.ok ? await d.repo.pointStates([...new Set(pending.map((q) => q.k))]) : {};
-    await answerPending(d.repo, pending, snap, new Map(), (k) => states[k], tg, newPushRun(clock() + SEND_BUDGET_MS, clock), CAPS.tgPerRun, false, counts, () => d.stopping?.() === true);
+    const run = newPushRun(clock() + SEND_BUDGET_MS, clock);
+    const ph: PhotoQueue = { reqs: [], stopped: false };
+    await answerPending(d.repo, pending, snap, new Map(), (k) => states[k], tg, run, CAPS.tgPerRun, false, counts, () => d.stopping?.() === true, ph);
+    await sendPhotos(d, tg, snap.gen, ph, Math.min(run.deadline, clock() + TICK_PHOTO_BUDGET_MS), counts);
     return { event: 'send', counts, exitCode: 0 };
   } catch (err) {
     return failed(err, counts);

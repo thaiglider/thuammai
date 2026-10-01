@@ -113,10 +113,14 @@ export function pgRepo(db: Db): AlertRepo {
 
     tgPending: (now) => guard(async () => {
       const cut = new Date(now.getTime() - CAPS.tgPendingTtlMin * 60e3);
-      const rs = await db.query<{ id: number; chat: number; k: string; createdAt: Date }>('SELECT id, chat_id AS chat, key AS k, created_at AS "createdAt" FROM tg_pending WHERE created_at >= $1 ORDER BY id LIMIT $2', [cut, CAPS.tgPerRun]);
+      // The follow is trusted only when it is this chat's own follow of this very key (spec §4).
+      const rs = await db.query<{ id: number; chat: number; k: string; createdAt: Date; fid: number | null; label: string | null }>(
+        'SELECT p.id AS id, p.chat_id AS chat, p.key AS k, p.created_at AS "createdAt", f.id AS fid, f.label AS label FROM tg_pending p LEFT JOIN follow f ON f.id = p.fid AND f.key = p.key AND f.target_id = (SELECT t.id FROM target t WHERE t.chat_id = p.chat_id) WHERE p.created_at >= $1 ORDER BY p.id LIMIT $2',
+        [cut, CAPS.tgPerRun],
+      );
       return rs.rows.flatMap((x): PendingRow[] => {
         const p = parseAlertKey(x.k);
-        return p ? [{ id: x.id, chat: x.chat, k: x.k, lat: p.lat, lon: p.lon, createdAt: isoOut(x.createdAt) }] : [];
+        return p ? [{ id: x.id, chat: x.chat, k: x.k, lat: p.lat, lon: p.lon, createdAt: isoOut(x.createdAt), fid: x.fid ?? null, label: x.label ?? null }] : [];
       });
     }),
 

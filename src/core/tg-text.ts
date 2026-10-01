@@ -11,6 +11,7 @@ import type { Level } from './types';
 export const CB = {
   follow: /^f:(\d{1,2}\.\d{3},\d{2,3}\.\d{3})$/,
   unfollow: /^u:(\d{1,12})$/,
+  view: /^v:(\d{1,12})$/,
   stopAll: /^x:all$/,
   dismiss: /^no$/,
 } as const;
@@ -31,6 +32,27 @@ export const FOLLOW_BUTTON_TH = 'ติดตามจุดนี้';
 export const DISMISS_BUTTON_TH = 'ไม่ต้อง';
 export const STOP_ALL_BUTTON_TH = 'ลบทั้งหมด';
 export const CANCEL_BUTTON_TH = 'ยกเลิก';
+
+/** Inline buttons the bot sends: a callback or a link (Plan O spec §2.4). */
+export type TgInlineButton = { text: string; callback_data: string } | { text: string; url: string };
+export interface TgInlineMarkup { inline_keyboard: TgInlineButton[][] }
+export const VIEW_LATEST_BUTTON_TH = 'ดูล่าสุด';
+export const OPEN_WEB_BUTTON_TH = 'เปิดเว็บ';
+export const FOLLOWED_BUTTON_TH = 'จุดที่ติดตาม';
+export const UNFOLLOW_BUTTON_TH = 'เลิกติดตาม';
+/** The name of a follow that has none. */
+export const FOLLOW_FALLBACK_LABEL_TH = 'จุดที่ติดตาม';
+export const VIEW_FULL_TH = `มีคำถามรอคำตอบครบ ${CAPS.tgPendingPerChat} จุดแล้ว — รอสักครู่แล้วกดใหม่`;
+export const viewButtonText = (label: string): string => `ดู ${label}`;
+
+/** [ดูล่าสุด] for a followed place, [เปิดเว็บ] only for an https link: Telegram rejects the whole
+ *  message when a button URL is invalid, and an alert must never be lost to a button. */
+export function cardButtons(fid: number | null, link: string): TgInlineMarkup | undefined {
+  const row: TgInlineButton[] = [];
+  if (fid !== null) row.push({ text: VIEW_LATEST_BUTTON_TH, callback_data: `v:${fid}` });
+  if (link.startsWith('https://')) row.push({ text: OPEN_WEB_BUTTON_TH, url: link });
+  return row.length ? { inline_keyboard: [row] } : undefined;
+}
 export const ALREADY_TH = 'ติดตามจุดนี้อยู่แล้ว';
 export const MAX_FOLLOWS_TH = `ติดตามครบ ${CAPS.placesPerTarget} จุดแล้ว — ใช้ /list เพื่อเลิกบางจุด`;
 /** Per-chat daily cap on NEW follows (security review: a follow/unfollow loop must not write
@@ -101,7 +123,6 @@ export const followedText = (label: string): string =>
 /** Also says the bot takes no reports: a name typed during a flood may really be a cry for help (final review I2). */
 export const labelSetText = (label: string): string => `ตั้งชื่อ '${label}' แล้ว\n${NOT_A_REPORT_TH}`;
 export const skipText = (label: string): string => `ใช้ชื่อ '${label}'`;
-export const unfollowButtonText = (label: string): string => `เลิกติดตาม ${label}`;
 export const unfollowedText = (label: string): string => `เลิกติดตาม '${label}' แล้ว`;
 
 export function listText(rows: readonly { label: string; key: string }[]): string {

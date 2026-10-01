@@ -31,6 +31,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY --from=build /src/server/dist ./dist
 COPY server/migrations ./server/migrations
+COPY server/fonts ./server/fonts
 COPY static/provinces.json ./static/provinces.json
 COPY infra ./infra
 USER node

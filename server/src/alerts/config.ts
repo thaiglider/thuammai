@@ -1,5 +1,5 @@
 import type { Counts } from '../../../src/alerts/log';
-import { trendAlertsOn, type AlertEnv } from '../../../src/alerts/main';
+import { chartsOn, trendAlertsOn, type AlertEnv } from '../../../src/alerts/main';
 import { sourceWatchOn } from '../../../src/alerts/source-watch';
 import { dbConn, parsePublicUrl, withSlash, type ConfigResult } from '../api/config';
 import type { PgConn } from '../db/pg';
@@ -26,19 +26,22 @@ export function loadAlertsConfig(e: NodeJS.ProcessEnv, read: SecretReader): Conf
     ok: true,
     cfg: {
       siteUrl,
-      env: { VAPID_PUBLIC_KEY: e.VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: priv, VAPID_SUBJECT: e.VAPID_SUBJECT, TELEGRAM_BOT_TOKEN: read('TELEGRAM_BOT_TOKEN'), LINE_CHANNEL_TOKEN: e.LINE_OFF === '1' ? undefined : read('LINE_CHANNEL_TOKEN'), SITE_URL: siteUrl, PUBLIC_URL: publicUrl || undefined, TREND_ALERTS: e.TREND_ALERTS === '0' ? '0' : undefined, SOURCE_WATCH: e.SOURCE_WATCH === '0' ? '0' : undefined },
+      env: { VAPID_PUBLIC_KEY: e.VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: priv, VAPID_SUBJECT: e.VAPID_SUBJECT, TELEGRAM_BOT_TOKEN: read('TELEGRAM_BOT_TOKEN'), LINE_CHANNEL_TOKEN: e.LINE_OFF === '1' ? undefined : read('LINE_CHANNEL_TOKEN'), SITE_URL: siteUrl, PUBLIC_URL: publicUrl || undefined, TREND_ALERTS: e.TREND_ALERTS === '0' ? '0' : undefined, SOURCE_WATCH: e.SOURCE_WATCH === '0' ? '0' : undefined, TG_CHARTS: e.TG_CHARTS === '0' ? '0' : undefined },
       paused: e.ALERTS_PAUSED === '1', kumaUrl: read('KUMA_PUSH_ALERTS') ?? null, db, tmpDir: e.TMPDIR || '/tmp', clockOffsetMs,
     },
   };
 }
 
 /** 0|1 flags for the `start` line (final review M5): a test knob left on, or a mistyped
- *  `*_FILE` path that silently turns Telegram or Kuma off, is visible — counts only. */
-export const alertsStartFlags = (c: AlertsConfig): Counts => ({
+ *  `*_FILE` path that silently turns Telegram or Kuma off, is visible — counts only.
+ *  `chartsReady`: the chart renderer started (font and binary present) — false leaves charts=0 on
+ *  the start line, so a broken image is visible instead of silently sending no photos. */
+export const alertsStartFlags = (c: AlertsConfig, chartsReady = false): Counts => ({
   clock_offset: c.clockOffsetMs !== 0 ? 1 : 0,
   tg: c.env.TELEGRAM_BOT_TOKEN ? 1 : 0,
   kuma: c.kumaUrl ? 1 : 0,
   line: c.env.LINE_CHANNEL_TOKEN ? 1 : 0,
   trend: trendAlertsOn(c.env) ? 1 : 0,
   source_watch: sourceWatchOn(c.env) ? 1 : 0,
+  charts: chartsReady && chartsOn(c.env) && c.env.TELEGRAM_BOT_TOKEN ? 1 : 0,
 });

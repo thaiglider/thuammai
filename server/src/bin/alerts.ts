@@ -1,12 +1,14 @@
 import webpush from 'web-push';
 import { logLine } from '../../../src/alerts/log';
-import type { AlertDeps } from '../../../src/alerts/main';
+import { chartSource, type ChartSource } from '../../../src/alerts/chart';
+import { chartsOn, type AlertDeps } from '../../../src/alerts/main';
 import { loadProvinces } from '../../../src/alerts/snapshot';
 import { alertsStartFlags, loadAlertsConfig } from '../alerts/config';
 import { kumaPush } from '../alerts/kuma';
 import { pgLineRepo } from '../alerts/line-repo-pg';
 import { pgAdvisoryLock } from '../alerts/lock';
 import { startAlerts } from '../alerts/main';
+import { resvgRender } from '../alerts/render';
 import { pgRepo } from '../alerts/repo-pg';
 import { pgWatchRepo } from '../alerts/watch-repo-pg';
 import { heartbeat } from '../alerts/run-state';
@@ -33,6 +35,16 @@ const bounded = <T>(p: Promise<T>, ms: number): Promise<T> => {
   return Promise.race([p, cut]).finally(() => clearTimeout(h));
 };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+// Chart photos (Plan O spec §3): off when the switch is off or the renderer cannot start (font
+// missing) — the detail texts go out either way, and the start line says charts=0.
+let charts: ChartSource | undefined;
+if (chartsOn(cfg.env)) {
+  try {
+    charts = chartSource({ fetch: (i, init) => fetch(i, init), siteUrl: cfg.siteUrl, render: await resvgRender() });
+  } catch {
+    charts = undefined;
+  }
+}
 const alert: AlertDeps = {
   repo: pgRepo(db), env: cfg.env,
   now: () => new Date(Date.now() + cfg.clockOffsetMs),
@@ -41,6 +53,7 @@ const alert: AlertDeps = {
   sleep,
   lineRepo: pgLineRepo(db),
   watchRepo: pgWatchRepo(db),
+  charts,
 };
 const log = (event: Parameters<typeof logLine>[1], counts: Record<string, number>) => logLine('alerts', event, counts);
 const handle = startAlerts({
@@ -55,7 +68,7 @@ const handle = startAlerts({
   clock: Date.now,
   sleep,
   log,
-  startFlags: alertsStartFlags(cfg),
+  startFlags: alertsStartFlags(cfg, charts !== undefined),
 });
 // NOTIFY thuammai_wake (a LINE location was queued) → tick soon (phase-3C spec §5.2).
 const wake = wakeListener({ client: pgWakeClient(cfg.db), onWake: () => handle.wake(), sleep, log: (c) => log('error', c) });

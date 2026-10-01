@@ -30,13 +30,24 @@ export function alertMessage(shown: 3 | 4, a: Assessment, gen: string, joined: b
   return { kind: 'alert', level: shown, title: LEVEL_TH[shown], body: lines.join('\n') };
 }
 
-/** "เลิกเตือน" (spec §5.4): below 3 for an hour — never "safe", never "the water went down". */
-export function clearMessage(now: 1 | 2, gen: string, quietUntil: string | null): AlertMessage {
-  const lines = [
+/** The lines under a "เลิกเตือน" title — shared with the Telegram detail text (Plan O spec §2.3). */
+export function clearLead(now: Level, quietUntil: string | null): string[] {
+  return [
     `ตอนนี้: ${LEVEL_TH[now]} — น้ำอาจยังไม่ลด ดูสภาพจริงและประกาศของอำเภอ/เขต`,
     ...(quietUntil ? [`ถ้าระดับกลับขึ้น "เตือนภัย" ก่อน ${fmtTime(quietUntil)} จะไม่แจ้งซ้ำ (ยกเว้นขึ้นถึง "อันตราย") — เปิดเว็บดูเป็นระยะ`] : []),
-    timeLine(gen),
   ];
+}
+
+/** The lines under a trend title, without the rate and without actions (Plan O spec §2.3). */
+export function trendLead(kind: TrendKind, shown: Level): string[] {
+  if (kind === 'trend_fall') return [`ยังอยู่ในระดับ${LEVEL_TH[shown]} — อย่าเพิ่งลุยน้ำหรือขับผ่าน ระวังไฟฟ้าและท่อระบายน้ำ`, 'จะแจ้งอีกครั้งถ้าน้ำกลับขึ้น'];
+  if (kind === 'trend_rise') return ['ยังไม่ควรกลับเข้าพื้นที่น้ำท่วม'];
+  return ['ยังไม่ถึงระดับเตือนภัย — เตรียมย้ายรถและยกของขึ้นที่สูง ติดตามทุก 1 ชม.'];
+}
+
+/** "เลิกเตือน" (spec §5.4): below 3 for an hour — never "safe", never "the water went down". */
+export function clearMessage(now: 1 | 2, gen: string, quietUntil: string | null): AlertMessage {
+  const lines = [...clearLead(now, quietUntil), timeLine(gen)];
   return { kind: 'clear', level: now, title: CLEAR_TITLE_TH, body: lines.join('\n') };
 }
 
@@ -51,11 +62,7 @@ export function trendMessage(kind: TrendKind, t: Trend, shown: Level, gen: strin
   const where = t.name !== undefined && t.km !== undefined ? ` · ${t.name} ${distanceText(t.km)}` : '';
   const rate = Math.abs(t.cmPerH ?? 0);
   const first = kind === 'trend_fall' ? `กำลังลด −${rate} ซม./ชม.${where}` : `กำลังขึ้น +${rate} ซม./ชม.${where}`;
-  const mid = kind === 'trend_fall'
-    ? [`ยังอยู่ในระดับ${LEVEL_TH[shown]} — อย่าเพิ่งลุยน้ำหรือขับผ่าน ระวังไฟฟ้าและท่อระบายน้ำ`, 'จะแจ้งอีกครั้งถ้าน้ำกลับขึ้น']
-    : kind === 'trend_rise'
-      ? ['ยังไม่ควรกลับเข้าพื้นที่น้ำท่วม', `ควรทำ: ${actionLines(shown).join(' · ')}`]
-      : ['ยังไม่ถึงระดับเตือนภัย — เตรียมย้ายรถและยกของขึ้นที่สูง ติดตามทุก 1 ชม.'];
+  const mid = kind === 'trend_rise' ? [...trendLead(kind, shown), `ควรทำ: ${actionLines(shown).join(' · ')}`] : trendLead(kind, shown);
   return { kind: 'trend', level: shown, title: TREND_TITLE_TH[kind], body: [first, ...mid, timeLine(gen)].join('\n') };
 }
 

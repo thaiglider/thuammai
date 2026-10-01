@@ -119,6 +119,7 @@ services:
       ALERTS_PAUSED: ${ALERTS_PAUSED:-0}
       TREND_ALERTS: ${TREND_ALERTS:-1}
       SOURCE_WATCH: ${SOURCE_WATCH:-1}
+      TG_CHARTS: ${TG_CHARTS:-1}
     secrets: [pg_app, vapid_private_key, telegram_bot_token, kuma_push_alerts, line_channel_token]
     tmpfs: ["/tmp:size=128m,mode=1777"]
     networks: [internal, egress]
