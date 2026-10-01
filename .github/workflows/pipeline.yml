@@ -22,8 +22,10 @@ jobs:
         run: |
           skip=false
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            active=$(gh run list -R "$GITHUB_REPOSITORY" --workflow pipeline.yml --limit 20 --json databaseId,status \
-              --jq "[.[] | select((.status==\"queued\" or .status==\"in_progress\" or .status==\"waiting\" or .status==\"pending\" or .status==\"requested\") and .databaseId != $GITHUB_RUN_ID)] | length")
+            # Only runs younger than 40 minutes count: a run GitHub leaves "in progress" for good
+            # (1 Oct 2026) must not stop the watchdog. A real run lives ≤ ~31 minutes (15 + 15 + gate).
+            active=$(gh run list -R "$GITHUB_REPOSITORY" --workflow pipeline.yml --limit 20 --json databaseId,status,createdAt \
+              --jq "[.[] | select((.status==\"queued\" or .status==\"in_progress\" or .status==\"waiting\" or .status==\"pending\" or .status==\"requested\") and .databaseId != $GITHUB_RUN_ID and (.createdAt | fromdateiso8601) > (now - 2400))] | length")
             if [ "$active" != "0" ]; then skip=true; fi
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
@@ -100,6 +102,7 @@ jobs:
           started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
           elapsed=$(( $(date +%s) - $(date -d "$started" +%s) ))
           if [ $elapsed -lt 600 ]; then sleep $(( 600 - elapsed )); fi
-          others=$(gh run list -R "$GITHUB_REPOSITORY" --workflow pipeline.yml --limit 20 --json databaseId,status \
-            --jq "[.[] | select((.status==\"queued\" or .status==\"in_progress\" or .status==\"waiting\" or .status==\"pending\" or .status==\"requested\") and .databaseId != $GITHUB_RUN_ID)] | length")
+          # Same 40-minute rule as the gate: a hung run must not stop the chain.
+          others=$(gh run list -R "$GITHUB_REPOSITORY" --workflow pipeline.yml --limit 20 --json databaseId,status,createdAt \
+            --jq "[.[] | select((.status==\"queued\" or .status==\"in_progress\" or .status==\"waiting\" or .status==\"pending\" or .status==\"requested\") and .databaseId != $GITHUB_RUN_ID and (.createdAt | fromdateiso8601) > (now - 2400))] | length")
           if [ "$others" = "0" ]; then gh workflow run pipeline.yml -R "$GITHUB_REPOSITORY" --ref main; else echo "another run active ($others); not dispatching"; fi
